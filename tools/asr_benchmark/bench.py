@@ -40,7 +40,8 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 # engine gets identical input.
 BADWORDS_FILTER = "highpass=f=80, acompressor=threshold=-15dB:ratio=2:attack=10:release=50"
 
-DEFAULT_ENGINES = "badwords-large-v3,mlx-large-v3,mlx-large-v3-turbo,apple-speech,apple-dictation"
+DEFAULT_ENGINES = ("badwords-large-v3,mlx-large-v3,mlx-large-v3-turbo,"
+                   "mlx-large-v3-whole,apple-speech,apple-dictation")
 
 
 def parse_args():
@@ -95,7 +96,16 @@ def badwords_config_value(args, expr):
 
 # ── Engines ───────────────────────────────────────────────────────────────────
 
-def engine_command(name, args, wav, out_json, prompt):
+def compute_islands(args, wav, out_dir):
+    """BadWords' raw sound islands for this audio (silence detection with the install's settings)."""
+    path = os.path.join(out_dir, "islands.json")
+    subprocess.run([badwords_python(args), os.path.join(HERE, "engines", "badwords_fw.py"), wav, os.devnull,
+                    "--badwords-dir", args.badwords_dir, "--no-normalize", "--islands-out", path],
+                   check=True, capture_output=True)
+    return path
+
+
+def engine_command(name, args, wav, out_json, prompt, islands_path=None):
     locale = {"en": "en-US"}.get(args.lang, args.lang)
     env = dict(os.environ)
     if name.startswith("badwords-"):
@@ -103,10 +113,15 @@ def engine_command(name, args, wav, out_json, prompt):
         cmd = [badwords_python(args), os.path.join(HERE, "engines", "badwords_fw.py"), wav, out_json,
                "--badwords-dir", args.badwords_dir, "--model", model, "--lang", args.lang, "--no-normalize"]
     elif name.startswith("mlx-"):
-        repo = {"mlx-large-v3": "mlx-community/whisper-large-v3-mlx",
-                "mlx-large-v3-turbo": "mlx-community/whisper-large-v3-turbo"}[name]
+        # mlx-<model>        : BadWords' sound-island clusters, prompt per cluster (like-for-like)
+        # mlx-<model>-whole  : one transcribe() over the whole file
+        whole = name.endswith("-whole")
+        repo = {"large-v3": "mlx-community/whisper-large-v3-mlx",
+                "large-v3-turbo": "mlx-community/whisper-large-v3-turbo"}[name[4:].removesuffix("-whole")]
         cmd = [args.mlx_python, os.path.join(HERE, "engines", "mlx_engine.py"), wav, out_json,
                "--model", repo, "--lang", args.lang, "--prompt", prompt]
+        if not whole:
+            cmd += ["--islands", islands_path]
         env["HF_HOME"] = args.hf_home
     elif name in ("apple-speech", "apple-dictation"):
         cmd = [args.apple_bin, wav, out_json, "--module", name.split("-")[1], "--locale", locale]
@@ -115,8 +130,8 @@ def engine_command(name, args, wav, out_json, prompt):
     return cmd, env
 
 
-def run_engine(name, args, wav, out_json, prompt, log_path):
-    cmd, env = engine_command(name, args, wav, out_json, prompt)
+def run_engine(name, args, wav, out_json, prompt, log_path, islands_path=None):
+    cmd, env = engine_command(name, args, wav, out_json, prompt, islands_path)
     with open(log_path, "w") as log:
         t0 = time.perf_counter()
         p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -224,20 +239,22 @@ def main():
     dur = audio_duration(wav)
     prompt = badwords_config_value(args, f"config.get_whisper_prompt_for_lang({args.lang!r}, '')")
     fillers = {norm(f) for f in badwords_config_value(args, "config.DEFAULT_BAD_WORDS") if norm(f) and " " not in f}
+    islands_path = compute_islands(args, wav, out_dir)
     print(f"Audio: {dur:.1f}s | engines: {', '.join(engines)}")
 
     if not args.no_warmup:
         warm = prepare_audio(args, out_dir, args.start, 15, "warmup.wav")
+        warm_islands = compute_islands(args, warm, os.path.join(out_dir, "logs"))
         for name in engines:
             print(f"  warm-up {name} ...", flush=True)
             run_engine(name, args, warm, os.path.join(out_dir, f"warmup_{name}.json"), prompt,
-                       os.path.join(out_dir, "logs", f"warmup_{name}.log"))
+                       os.path.join(out_dir, "logs", f"warmup_{name}.log"), warm_islands)
 
     results = {}
     for name in engines:
         print(f"  run {name} ...", flush=True)
         out_json = os.path.join(out_dir, f"{name}.json")
-        r = run_engine(name, args, wav, out_json, prompt, os.path.join(out_dir, "logs", f"{name}.log"))
+        r = run_engine(name, args, wav, out_json, prompt, os.path.join(out_dir, "logs", f"{name}.log"), islands_path)
         if r["exit_code"] != 0 or not os.path.isfile(out_json):
             print(f"    FAILED (exit {r['exit_code']}), see logs/{name}.log")
             results[name] = r

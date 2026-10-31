@@ -21,6 +21,8 @@ ap.add_argument("out")
 ap.add_argument("--model", required=True, help="e.g. mlx-community/whisper-large-v3-mlx")
 ap.add_argument("--lang", default=None)
 ap.add_argument("--prompt", default="")
+ap.add_argument("--islands", default=None,
+                help="JSON of BadWords' raw sound islands; transcribe per cluster like BadWords does")
 args = ap.parse_args()
 
 t0 = time.perf_counter()
@@ -33,8 +35,7 @@ from mlx_whisper.load_models import load_model
 load_model(args.model)
 t_load = time.perf_counter()
 
-result = mlx_whisper.transcribe(
-    args.audio,
+DECODE = dict(
     path_or_hf_repo=args.model,
     language=args.lang,
     initial_prompt=args.prompt or None,
@@ -46,6 +47,34 @@ result = mlx_whisper.transcribe(
     word_timestamps=True,
     verbose=None,
 )
+
+if args.islands:
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from islands import cluster_islands
+    from mlx_whisper.audio import SAMPLE_RATE, load_audio
+
+    with open(args.islands) as f:
+        clusters = cluster_islands(json.load(f))
+    audio = load_audio(args.audio)
+    segs_all, lang = [], None
+    for c_start, c_end in clusters:
+        chunk = audio[int(c_start * SAMPLE_RATE):int(c_end * SAMPLE_RATE)]
+        if len(chunk) == 0:
+            continue
+        r = mlx_whisper.transcribe(chunk, **DECODE)
+        lang = lang or r.get("language")
+        for s in r.get("segments", []):
+            s["start"] += c_start
+            s["end"] += c_start
+            for w in s.get("words", []):
+                w["start"] += c_start
+                w["end"] += c_start
+            segs_all.append(s)
+    result = {"segments": segs_all, "language": lang, "clusters": len(clusters)}
+else:
+    result = mlx_whisper.transcribe(args.audio, **DECODE)
 t_done = time.perf_counter()
 
 segments = []
@@ -70,5 +99,6 @@ with open(args.out, "w", encoding="utf-8") as f:
         "language": result.get("language"),
         "timings": {"load_s": t_load - t0, "transcribe_s": t_done - t_load},
         "peak_gpu_mb": peak_gpu / 1e6,
+        "clusters": result.get("clusters"),
         "segments": segments,
     }, f)

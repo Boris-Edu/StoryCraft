@@ -25,6 +25,8 @@ ap.add_argument("--model", default="large-v3")
 ap.add_argument("--lang", default="en")
 ap.add_argument("--no-normalize", action="store_true",
                 help="input already has BadWords' normalize filter applied (bench.py does this)")
+ap.add_argument("--islands-out", default=None,
+                help="only compute BadWords' raw sound islands, write them as JSON here, and exit")
 args = ap.parse_args()
 
 bw = os.path.abspath(args.badwords_dir)
@@ -43,6 +45,10 @@ norm = args.audio if args.no_normalize else eng.normalize_audio(args.audio)
 silence = eng.detect_silence(norm, prefs.get("silence_threshold_db", -42.0), prefs.get("silence_min_dur", 0.2))
 duration = eng._get_audio_duration(norm)
 islands = eng._compute_sound_islands(silence, duration)
+if args.islands_out:
+    with open(args.islands_out, "w") as f:
+        json.dump([list(map(float, isl)) for isl in islands], f)
+    sys.exit(0)
 compute = prefs.get("ai_compute_type") or eng._get_optimal_compute_type("cpu")
 if compute == "Auto":
     compute = eng._get_optimal_compute_type("cpu")
