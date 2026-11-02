@@ -174,7 +174,7 @@
 
   // ── Install tabs and copy buttons ──
   const tabs = Array.from(document.querySelectorAll(".tab[data-os]"));
-  const cmds = Array.from(document.querySelectorAll(".cmd"));
+  const cmds = Array.from(document.querySelectorAll(".cmd, .dl[data-os]"));
   const pick = (os) => {
     tabs.forEach((t) => t.setAttribute("aria-selected", String(t.dataset.os === os)));
     cmds.forEach((c) => { c.hidden = c.dataset.os !== os; });

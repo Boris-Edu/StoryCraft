@@ -319,6 +319,9 @@ code { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
 .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; color: #d6d8f0; scrollbar-width: thin; }
 .copy { flex: none; font: 500 13px "Inter", sans-serif; color: var(--text); background: var(--ink-4); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
 .copy:hover { border-color: var(--muted); }
+.dl { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 14px; margin: 14px 0 0; color: var(--muted); font-size: 14px; }
+.dl[hidden] { display: none; }
+.dl code { color: var(--text); }
 .reqs { margin: 26px 0 0; padding-left: 20px; color: var(--muted); display: grid; gap: 8px; font-size: 15px; }
 .reqs b { color: var(--text); }
 

@@ -309,8 +309,8 @@
 <section id="install" class="install wrap">
   <div class="section-head">
     <p class="eyebrow">Install</p>
-    <h2>One command</h2>
-    <p class="section-lede">Paste it into a terminal. The installer puts StoryCraft in its own folder, adds it to Resolve's <b>Workspace → Scripts</b> menu, and can update, repair or uninstall it later.</p>
+    <h2>One command, or the setup app</h2>
+    <p class="section-lede">Paste the command into a terminal, or download StoryCraft Setup and follow its steps. Both put StoryCraft in its own folder, add it to Resolve's <b>Workspace → Scripts</b> menu, and can update, repair or uninstall it later.</p>
   </div>
   <div class="tabs" role="tablist" aria-label="Operating system">
     <button class="tab" role="tab" aria-selected="true" data-os="mac">macOS</button>
@@ -320,11 +320,15 @@
   <div class="cmd" data-os="mac"><code>curl -fsSL "https://raw.githubusercontent.com/Boris-Edu/StoryCraft/fork/setupfiles/mac-setup.sh" | bash</code><button class="copy" type="button">Copy</button></div>
   <div class="cmd" data-os="win" hidden><code>irm "https://raw.githubusercontent.com/Boris-Edu/StoryCraft/fork/setupfiles/windows-setup.ps1" | iex</code><button class="copy" type="button">Copy</button></div>
   <div class="cmd" data-os="linux" hidden><code>curl -fsSL "https://raw.githubusercontent.com/Boris-Edu/StoryCraft/fork/setupfiles/linux-setup.sh" | bash</code><button class="copy" type="button">Copy</button></div>
+  <p class="dl" data-os="mac"><a class="btn btn-ghost btn-small" href="https://github.com/Boris-Edu/StoryCraft/releases/latest/download/StoryCraft-Setup-macOS.zip">Download StoryCraft Setup for macOS</a><span>Unzip, then right-click the app and choose Open the first time.</span></p>
+  <p class="dl" data-os="win" hidden><a class="btn btn-ghost btn-small" href="https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-windows.exe">Download StoryCraft Setup for Windows</a><span>If SmartScreen stops it: More info → Run anyway.</span></p>
+  <p class="dl" data-os="linux" hidden><a class="btn btn-ghost btn-small" href="https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-linux">Download StoryCraft Setup for Linux</a><span>Make it executable (<code>chmod +x storycraft-setup-linux</code>), then run it.</span></p>
   <ul class="reqs">
     <li><b>DaVinci Resolve</b> or <b>Resolve Studio</b> (not the App Store version). Resolve's own transcription needs Studio 21.1+.</li>
     <li>About 4 GB of space, plus 1–5 GB for speech models.</li>
     <li>Built and tested on macOS with Apple Silicon. Windows and Linux use the same installer but are untested.</li>
     <li>The scripts are plain text on <a href="https://github.com/Boris-Edu/StoryCraft/tree/fork/setupfiles">GitHub</a>: read them before you run them.</li>
+    <li>StoryCraft Setup runs the same installer in a window. It isn't code-signed yet, so macOS and Windows ask you to confirm the first time you open it.</li>
   </ul>
 </section>
 
