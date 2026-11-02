@@ -60,7 +60,7 @@ irm "https://raw.githubusercontent.com/Boris-Edu/StoryCraft/fork/setupfiles/wind
 curl -fsSL "https://raw.githubusercontent.com/Boris-Edu/StoryCraft/fork/setupfiles/linux-setup.sh" | bash
 ```
 
-**Prefer a window?** Download StoryCraft Setup, which runs the same installer step by step: [macOS](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/StoryCraft-Setup-macOS.zip) (unzip, then right-click → Open the first time) · [Windows](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-windows.exe) (SmartScreen: More info → Run anyway) · [Linux](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-linux) (`chmod +x`, then run). It isn't code-signed yet, hence the extra confirmation.
+**Prefer a window?** Download StoryCraft Setup, which runs the same installer step by step: [macOS](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/StoryCraft-Setup-macOS.zip) (unzip and open it; the first time, allow it in System Settings → Privacy & Security → Open Anyway) · [Windows](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-windows.exe) (SmartScreen: More info → Run anyway) · [Linux](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-linux) (`chmod +x`, then run). It isn't code-signed yet, hence the extra confirmation.
 
 The scripts are plain text in [setupfiles/](setupfiles): read them before running them. StoryCraft is developed and tested on macOS with Apple Silicon and DaVinci Resolve Studio; Windows and Linux use the same installer but are untested.
 

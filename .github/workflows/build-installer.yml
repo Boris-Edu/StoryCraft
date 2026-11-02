@@ -71,6 +71,10 @@ jobs:
             <key>NSHighResolutionCapable</key><true/>
           </dict></plist>
           EOF
+          # Ad-hoc signature over the whole bundle: unsigned, macOS may call the download "damaged";
+          # signed ad hoc it offers System Settings > Privacy & Security > Open Anyway
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
           (cd dist && ditto -c -k --keepParent "StoryCraft Setup.app" StoryCraft-Setup-macOS.zip && rm -rf "StoryCraft Setup.app")
 
       - name: Build (Windows / Linux)
