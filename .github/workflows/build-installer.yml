@@ -1,17 +1,12 @@
-name: Build Installer Binaries
+name: Build StoryCraft Setup
 
+# The setup app (installer/) is a window over setupfiles/setup.py. On each published release it is built
+# for macOS, Windows and Linux and attached to the release under the names the bootstrap scripts look for
+# (storycraft-setup-macos / -windows.exe / -linux), plus a zipped "StoryCraft Setup.app" for macOS.
+# The binaries are not code-signed: Gatekeeper and SmartScreen warn when they are opened from a browser.
 on:
-  push:
-    branches:
-      - 'dev-v4'
-      - 'main'
-    paths:
-      - 'installer/**'
-      - 'setupfiles/**'
-      - 'src/config/app_constants.py'
-      - '.github/workflows/build-installer.yml'
-  # No tag or release trigger: StoryCraft releases ship no prebuilt installer (the bootstrap scripts run
-  # setupfiles/setup.py), and this job builds the original BadWords installer.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -19,84 +14,86 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ matrix.os_name }})
+    name: Build (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            os_name: Windows x64
-            target: x86_64-pc-windows-msvc
-            binary_name: badwords-installer.exe
-            output_name: badwords-setup-windows.exe
           - os: macos-latest
-            os_name: macOS Universal
-            target: aarch64-apple-darwin
-            binary_name: badwords-installer
-            output_name: badwords-setup-macos
-          - os: ubuntu-latest
-            os_name: Linux x64
-            target: x86_64-unknown-linux-gnu
-            binary_name: badwords-installer
-            output_name: badwords-setup-linux
-
+            name: macOS
+          - os: windows-latest
+            name: Windows x64
+          - os: ubuntu-22.04
+            name: Linux x64
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install System Dependencies (Linux)
+      - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libx11-dev libasound2-dev libudev-dev libfontconfig1-dev libdbus-1-dev desktop-file-utils
+          sudo apt-get install -y libxkbcommon-dev libx11-dev libasound2-dev libudev-dev libfontconfig1-dev libdbus-1-dev
 
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Build Installer Binary
-        run: cargo build --release --manifest-path installer/Cargo.toml
-
-      - name: Set up MSVC environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build Windows Standalone Launcher (BadWords.exe)
-        if: runner.os == 'Windows'
-        shell: cmd
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
         run: |
-          python setupfiles\windows\generate_version_header.py
-          cd setupfiles\windows
-          rc /fo launcher.res launcher.rc
-          cl /O2 /Fe:BadWords.exe launcher.c launcher.res /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib
-          cd ..\..
+          cargo build --release --manifest-path installer/Cargo.toml --target aarch64-apple-darwin
+          cargo build --release --manifest-path installer/Cargo.toml --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/storycraft-setup-macos \
+            installer/target/aarch64-apple-darwin/release/storycraft-installer \
+            installer/target/x86_64-apple-darwin/release/storycraft-installer
+          chmod +x dist/storycraft-setup-macos
+          # A double-clickable app bundle around the same binary
+          APP="dist/StoryCraft Setup.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp dist/storycraft-setup-macos "$APP/Contents/MacOS/StoryCraft Setup"
+          cp assets/icons/icon_default.icns "$APP/Contents/Resources/AppIcon.icns"
+          VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' src/config/app_constants.py)
+          cat > "$APP/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>StoryCraft Setup</string>
+            <key>CFBundleDisplayName</key><string>StoryCraft Setup</string>
+            <key>CFBundleIdentifier</key><string>com.github.boris-edu.storycraft.setup</string>
+            <key>CFBundleExecutable</key><string>StoryCraft Setup</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          EOF
+          (cd dist && ditto -c -k --keepParent "StoryCraft Setup.app" StoryCraft-Setup-macOS.zip && rm -rf "StoryCraft Setup.app")
 
-      - name: Prepare Artifact
+      - name: Build (Windows / Linux)
+        if: runner.os != 'macOS'
         shell: bash
         run: |
+          cargo build --release --manifest-path installer/Cargo.toml
           mkdir -p dist
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp installer/target/release/${{ matrix.binary_name }} dist/${{ matrix.output_name }}
-            if [ -f "setupfiles/windows/BadWords.exe" ]; then
-              cp setupfiles/windows/BadWords.exe dist/BadWords.exe
-            fi
+            cp installer/target/release/storycraft-installer.exe dist/storycraft-setup-windows.exe
           else
-            cp installer/target/release/${{ matrix.binary_name }} dist/${{ matrix.output_name }}
-            chmod +x dist/${{ matrix.output_name }}
+            cp installer/target/release/storycraft-installer dist/storycraft-setup-linux
+            chmod +x dist/storycraft-setup-linux
           fi
 
-      - name: Upload Private Action Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.output_name }}
+          name: storycraft-setup-${{ runner.os }}
           path: dist/*
-          retention-days: 90
+          retention-days: 30
 
-      - name: Publish Public Release Asset
+      - name: Attach to the release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

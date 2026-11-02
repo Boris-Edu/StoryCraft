@@ -5,7 +5,7 @@
 
 pub fn pick_folder(default_dir: Option<&str>) -> Option<String> {
     let mut dialog = rfd::FileDialog::new()
-        .set_title("Select BadWords Installation Directory");
+        .set_title("Select StoryCraft Installation Directory");
 
     if let Some(dir) = default_dir {
         dialog = dialog.set_directory(dir);

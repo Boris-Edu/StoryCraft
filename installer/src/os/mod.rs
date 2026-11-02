@@ -22,7 +22,7 @@ pub fn create_hidden_command<P: AsRef<std::ffi::OsStr>>(program: P) -> std::proc
     cmd
 }
 
-pub const APP_NAME: &str = "BadWords";
+pub const APP_NAME: &str = "StoryCraft";
 
 /// Returns default installation directory depending on current OS
 pub fn default_install_dir() -> PathBuf {
@@ -175,74 +175,48 @@ pub fn resolve_script_dirs() -> Vec<PathBuf> {
     unique
 }
 
-/// Detects existing BadWords installation path via OS registration, DaVinci Resolve wrappers, or standard directories.
+/// True only for a StoryCraft install: its config says APP_NAME = "StoryCraft" (same check as setup.py),
+/// so a BadWords install is never picked up, repaired or removed
+pub fn is_storycraft_dir(dir: &std::path::Path) -> bool {
+    for c in [dir.join("config").join("app_constants.py"), dir.join("src").join("config").join("app_constants.py")] {
+        if let Ok(text) = std::fs::read_to_string(&c) {
+            if text.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with("APP_NAME")
+                    && l.split_once('=')
+                        .map(|(_, v)| v.split('#').next().unwrap_or("").trim().trim_matches(|ch| ch == '"' || ch == '\'') == "StoryCraft")
+                        .unwrap_or(false)
+            }) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// An existing StoryCraft install: the Resolve menu entry's INSTALL_DIR, then the default folder
 pub fn detect_existing_install() -> Option<PathBuf> {
-    // 1. Check OS native registration (Windows Registry, Linux .desktop entry, macOS App Bundle)
-    #[cfg(target_os = "windows")]
-    if let Some(p) = windows::detect_installed_location() {
-        return Some(p);
-    }
-
-    #[cfg(target_os = "linux")]
-    if let Some(p) = linux::detect_installed_location() {
-        return Some(p);
-    }
-
-    #[cfg(target_os = "macos")]
-    if let Some(p) = macos::detect_installed_location() {
-        return Some(p);
-    }
-
-    // 2. Check DaVinci Resolve script wrappers (legacy versions e.g. 3.2.4)
-    let script_dirs = resolve_script_dirs();
-    for dir in script_dirs {
-        for filename in ["BadWords.py", "BadWords (Linux).py", "BadWords (Mac).py", "BadWords (Windows).py", "Badwords.py"] {
-            let wrapper = dir.join(filename);
-            if wrapper.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&wrapper) {
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with("INSTALL_DIR") {
-                            if let Some((_, val)) = trimmed.split_once('=') {
-                                let mut raw = val.trim();
-                                if raw.starts_with('r') || raw.starts_with('R') {
-                                    raw = &raw[1..];
-                                }
-                                let clean_path = raw.trim().trim_matches(|c| c == '"' || c == '\'');
-                                let path = PathBuf::from(clean_path);
-                                if path.exists() && (path.join("main.py").is_file() || path.join("src").join("main.py").is_file()) {
-                                    return Some(path);
-                                }
-                            }
+    for dir in resolve_script_dirs() {
+        let wrapper = dir.join("StoryCraft.py");
+        if let Ok(content) = std::fs::read_to_string(&wrapper) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("INSTALL_DIR") {
+                    if let Some((_, val)) = trimmed.split_once('=') {
+                        let raw = val.trim().trim_start_matches(['r', 'R']);
+                        let path = PathBuf::from(raw.trim().trim_matches(|c| c == '"' || c == '\''));
+                        if is_storycraft_dir(&path) {
+                            return Some(path);
                         }
                     }
                 }
             }
         }
     }
-
-    // Fallback 1: Default installation directory
     let def = default_install_dir();
-    if def.join("main.py").is_file() || def.join("src").join("main.py").is_file() {
+    if is_storycraft_dir(&def) {
         return Some(def);
     }
-
-    // Fallback 2: Common OS standard paths
-    if let Some(home) = dirs::home_dir() {
-        let candidates = [
-            home.join(".local").join("share").join(APP_NAME),
-            home.join(".local").join(APP_NAME),
-            home.join(APP_NAME),
-            home.join("AppData").join("Local").join(APP_NAME),
-            home.join("Library").join("Application Support").join(APP_NAME),
-        ];
-        for c in candidates {
-            if (c.join("main.py").is_file() || c.join("src").join("main.py").is_file()) && c.exists() {
-                return Some(c);
-            }
-        }
-    }
-
     None
 }
 

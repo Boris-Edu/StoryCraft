@@ -56,14 +56,14 @@ fn main() -> eframe::Result<()> {
         if let Ok(cur_exe) = std::env::current_exe() {
             os::unblock_file(&cur_exe);
             if let Some(p) = cur_exe.parent() {
-                os::unblock_file(&p.join("BadWords.exe"));
-                os::unblock_file(&p.join("badwords-setup-windows.exe"));
+                os::unblock_file(&p.join("StoryCraft.exe"));
+                os::unblock_file(&p.join("storycraft-setup-windows.exe"));
             }
         }
     }
 
     // Reset log file for fresh session
-    let _ = std::fs::write(state::log_file_path(), "=== BadWords Setup Session Log ===\n");
+    let _ = std::fs::write(state::log_file_path(), "=== StoryCraft Setup Session Log ===\n");
 
     // CLI / Headless integration mode for testing & CI
     if args.iter().any(|a| a == "--cli" || a == "--headless") {
@@ -98,10 +98,15 @@ fn main() -> eframe::Result<()> {
 
     let app_args = args.clone();
     eframe::run_native(
-        "BadWords Setup",
+        "StoryCraft Setup",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // StoryCraft look: ink surfaces, violet selection, cyan links
+            let mut visuals = egui::Visuals::dark();
+            visuals.selection.bg_fill = egui::Color32::from_rgb(88, 56, 160);
+            visuals.hyperlink_color = egui::Color32::from_rgb(34, 211, 238);
+            visuals.extreme_bg_color = egui::Color32::from_rgb(11, 11, 20);
+            cc.egui_ctx.set_visuals(visuals);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Box::new(InstallerApp::new_with_args(&app_args))
         }),
@@ -110,7 +115,7 @@ fn main() -> eframe::Result<()> {
 
 /// Headless CLI runner for GitHub Actions & automated scripts
 fn run_headless_cli(args: &[String]) -> eframe::Result<()> {
-    println!("[CLI] BadWords Installer {} Headless Engine Initialized", APP_VERSION);
+    println!("[CLI] StoryCraft Installer {} Headless Engine Initialized", APP_VERSION);
     let (tx, rx) = channel();
 
     let target_dir = if let Some(idx) = args.iter().position(|a| a == "--install" || a == "--dir") {
@@ -183,7 +188,7 @@ fn run_headless_cli(args: &[String]) -> eframe::Result<()> {
 fn run_standalone_terminal() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("BadWords Setup — Terminal Console")
+            .with_title("StoryCraft Setup — Terminal Console")
             .with_inner_size([650.0, 480.0])
             .with_min_inner_size([400.0, 300.0])
             .with_resizable(true)
@@ -197,10 +202,15 @@ fn run_standalone_terminal() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "BadWords Setup — Terminal",
+        "StoryCraft Setup — Terminal",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // StoryCraft look: ink surfaces, violet selection, cyan links
+            let mut visuals = egui::Visuals::dark();
+            visuals.selection.bg_fill = egui::Color32::from_rgb(88, 56, 160);
+            visuals.hyperlink_color = egui::Color32::from_rgb(34, 211, 238);
+            visuals.extreme_bg_color = egui::Color32::from_rgb(11, 11, 20);
+            cc.egui_ctx.set_visuals(visuals);
             Box::new(StandaloneTerminalApp::new())
         }),
     )
@@ -227,14 +237,14 @@ impl eframe::App for StandaloneTerminalApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(16, 16, 16)).inner_margin(16.0))
+            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(11, 11, 20)).inner_margin(16.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("● Live Execution Console")
                             .size(13.0)
                             .strong()
-                            .color(egui::Color32::from_rgb(52, 211, 153))
+                            .color(egui::Color32::from_rgb(34, 211, 238))
                             .family(egui::FontFamily::Monospace),
                     );
                     
@@ -255,9 +265,9 @@ impl eframe::App for StandaloneTerminalApp {
                     .show(ui, |ui| {
                         for line in self.last_content.lines() {
                             let color = if line.contains("[ OK ]") || line.contains("[OK]") {
-                                egui::Color32::from_rgb(52, 211, 153)
+                                egui::Color32::from_rgb(34, 211, 238)
                             } else if line.contains("[STEP]") {
-                                egui::Color32::from_rgb(56, 189, 248)
+                                egui::Color32::from_rgb(168, 85, 247)
                             } else if line.contains("[WARN]") {
                                 egui::Color32::from_rgb(251, 191, 36)
                             } else if line.contains("[ERR") || line.contains("ERROR") {
@@ -307,6 +317,9 @@ struct InstallerApp {
     uninstall_system_python: bool,
     has_auto_python_marker: bool,
     operation_success: bool,
+    /// Development aid: STORYCRAFT_SETUP_SCREENSHOT=<file.ppm> saves the window after it settles, then quits
+    screenshot_path: Option<String>,
+    screenshot_frame: u32,
     tx: Sender<IpcEvent>,
     rx: Receiver<IpcEvent>,
 }
@@ -375,6 +388,8 @@ impl InstallerApp {
             uninstall_system_python: false,
             has_auto_python_marker: false,
             operation_success: true,
+            screenshot_path: std::env::var("STORYCRAFT_SETUP_SCREENSHOT").ok(),
+            screenshot_frame: 0,
             tx,
             rx,
         }
@@ -382,6 +397,10 @@ impl InstallerApp {
 
     fn new_with_args(args: &[String]) -> Self {
         let mut app = Self::new();
+        if let Ok(screen) = std::env::var("STORYCRAFT_SETUP_SCREEN") {
+            app.preview_screen(&screen);
+            return app;
+        }
         if args.iter().any(|a| a == "--uninstall") {
             app.action = Some(InstallAction::Uninstall);
             let target = app.current_target_path();
@@ -393,6 +412,36 @@ impl InstallerApp {
             app.screen = Screen::ConfirmAction;
         }
         app
+    }
+
+    /// Development aid: open on one screen with sample content (STORYCRAFT_SETUP_SCREEN), nothing runs
+    fn preview_screen(&mut self, screen: &str) {
+        match screen {
+            "menu" => self.screen = Screen::Menu,
+            "path" => {
+                self.action = Some(InstallAction::InstallUpdate);
+                self.screen = Screen::SelectPath;
+            }
+            "confirm" => {
+                self.action = Some(InstallAction::Uninstall);
+                self.screen = Screen::ConfirmAction;
+            }
+            "progress" | "complete" | "failed" => {
+                self.action = Some(InstallAction::InstallUpdate);
+                self.screen = if screen == "progress" { Screen::Progress } else { Screen::Complete };
+                self.progress = 0.55;
+                self.displayed_progress = 0.55;
+                self.sub_progress = 0.5;
+                self.displayed_sub_progress = 0.5;
+                self.status_title = "Installing PySide6 GUI library".to_string();
+                self.status_details = "Installing PySide6 GUI library".to_string();
+                self.operation_success = screen != "failed";
+                for (level, msg) in [("SUCCESS", "[ OK ] Downloading release v4.0.0 from GitHub"), ("SUCCESS", "[ OK ] Application files cleanly deployed."), ("INFO", "[....] Installing / upgrading dependencies...")] {
+                    self.logs.push(LogEntry { level: level.to_string(), message: msg.to_string() });
+                }
+            }
+            _ => {}
+        }
     }
 
     fn current_target_path(&self) -> PathBuf {
@@ -501,11 +550,11 @@ impl InstallerApp {
     }
 }
 
-/// Launches the installed BadWords application using its dedicated native launcher
-fn launch_installed_badwords(target: &std::path::Path) {
+/// Launches the installed StoryCraft application using its dedicated native launcher
+fn launch_installed_storycraft(target: &std::path::Path) {
     #[cfg(target_os = "windows")]
     {
-        let launcher_exe = target.join("BadWords.exe");
+        let launcher_exe = target.join("StoryCraft.exe");
         if launcher_exe.is_file() {
             let _ = os::create_hidden_command(&launcher_exe).spawn();
         } else {
@@ -520,7 +569,7 @@ fn launch_installed_badwords(target: &std::path::Path) {
     }
     #[cfg(target_os = "macos")]
     {
-        let app_path = dirs::home_dir().map(|h| h.join("Applications").join("BadWords.app"));
+        let app_path = dirs::home_dir().map(|h| h.join("Applications").join("StoryCraft.app"));
         let launched = if let Some(ref app) = app_path {
             if app.exists() {
                 std::process::Command::new("open").arg(app).spawn().is_ok()
@@ -531,7 +580,7 @@ fn launch_installed_badwords(target: &std::path::Path) {
             false
         };
         if !launched {
-            let mach_launcher = target.join("BadWords");
+            let mach_launcher = target.join("StoryCraft");
             if mach_launcher.is_file() {
                 let _ = std::process::Command::new(&mach_launcher).spawn();
             } else {
@@ -547,11 +596,11 @@ fn launch_installed_badwords(target: &std::path::Path) {
     }
     #[cfg(target_os = "linux")]
     {
-        let elf_launcher = target.join("BadWords");
+        let elf_launcher = target.join("StoryCraft");
         if elf_launcher.is_file() {
             let _ = std::process::Command::new(&elf_launcher).spawn();
         } else {
-            let local_bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("badwords"));
+            let local_bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("storycraft"));
             let launched_symlink = if let Some(ref lb) = local_bin {
                 if lb.is_file() {
                     std::process::Command::new(lb).spawn().is_ok()
@@ -585,6 +634,28 @@ impl eframe::App for InstallerApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let t = self.language.t();
+
+        if let Some(path) = self.screenshot_path.clone() {
+            self.screenshot_frame += 1;
+            if self.screenshot_frame == 30 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+            }
+            ctx.request_repaint();
+            let shot = ctx.input(|i| {
+                i.raw.events.iter().find_map(|e| match e {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(img) = shot {
+                let mut ppm = format!("P6\n{} {}\n255\n", img.size[0], img.size[1]).into_bytes();
+                for px in &img.pixels {
+                    ppm.extend_from_slice(&[px.r(), px.g(), px.b()]);
+                }
+                let _ = std::fs::write(&path, ppm);
+                std::process::exit(0);
+            }
+        }
 
         // Płynna animacja pasków postępu (niezależna od klatkażu, ciągły VSync repaint)
         if self.screen == Screen::Progress {
@@ -692,12 +763,13 @@ impl eframe::App for InstallerApp {
                 }
             }
             Screen::Menu => {
+                // Options 0, 1, 3, 4 (index 2, Move, isn't shown); keys 1-4 follow the numbers on screen
                 if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
                     self.keyboard_navigation_active = true;
-                    self.menu_selected_index = (self.menu_selected_index + 4) % 5;
+                    self.menu_selected_index = match self.menu_selected_index { 0 => 4, 1 => 0, 3 => 1, _ => 3 };
                 } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
                     self.keyboard_navigation_active = true;
-                    self.menu_selected_index = (self.menu_selected_index + 1) % 5;
+                    self.menu_selected_index = match self.menu_selected_index { 0 => 1, 1 => 3, 3 => 4, _ => 0 };
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::Space)) {
                     self.select_menu_option(self.menu_selected_index);
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
@@ -708,16 +780,10 @@ impl eframe::App for InstallerApp {
                     self.select_menu_option(1);
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Num3)) {
                     self.keyboard_navigation_active = true;
-                    self.select_menu_option(2);
+                    self.select_menu_option(3);
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Num4)) {
                     self.keyboard_navigation_active = true;
-                    self.select_menu_option(3);
-                } else if ctx.input(|i| i.key_pressed(egui::Key::Num5)) {
-                    self.keyboard_navigation_active = true;
                     self.select_menu_option(4);
-                } else if ctx.input(|i| i.key_pressed(egui::Key::D)) {
-                    self.keyboard_navigation_active = true;
-                    self.trigger_developer_mode();
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::ArrowLeft)) {
                     self.screen = Screen::Welcome;
                 }
@@ -766,7 +832,7 @@ impl eframe::App for InstallerApp {
             Screen::Complete => {
                 if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::Space)) {
                     if self.launch_on_finish && self.action == Some(InstallAction::InstallUpdate) {
-                        launch_installed_badwords(&self.current_target_path());
+                        launch_installed_storycraft(&self.current_target_path());
                     }
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -811,7 +877,7 @@ impl eframe::App for InstallerApp {
 
                 // Ciało Okna (Dokładnie 650x550px)
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(30, 30, 30))
+                    .fill(egui::Color32::from_rgb(20, 20, 31))
                     .inner_margin(0.0)
                     .outer_margin(margin)
                     .rounding(0.0)
@@ -823,7 +889,7 @@ impl eframe::App for InstallerApp {
                         ui.vertical(|ui| {
                             // 1. PASEK TYTUŁOWY (36px, RGB 22, 22, 22)
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgb(22, 22, 22))
+                                .fill(egui::Color32::from_rgb(14, 14, 23))
                                 .rounding(0.0)
                                 .inner_margin(0.0)
                                 .show(ui, |ui| {
@@ -898,7 +964,7 @@ impl eframe::App for InstallerApp {
                                                 );
                                                 ui.add_space(8.0);
                                                 ui.label(
-                                                    egui::RichText::new("BadWords Setup")
+                                                    egui::RichText::new("StoryCraft Setup")
                                                         .size(13.0)
                                                         .color(egui::Color32::from_gray(215))
                                                 );
@@ -920,7 +986,7 @@ impl eframe::App for InstallerApp {
 
                             // 2. GŁÓWNY OBSZAR ZAWARTOSCI (650x459px, ścisłe ograniczenie szerokości)
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgb(30, 30, 30))
+                                .fill(egui::Color32::from_rgb(20, 20, 31))
                                 .rounding(0.0)
                                 .inner_margin(0.0)
                                 .show(ui, |ui| {
@@ -1027,7 +1093,7 @@ impl eframe::App for InstallerApp {
                                                                     ui,
                                                                     ctx,
                                                                     "1",
-                                                                    egui::Color32::from_rgb(52, 211, 153),
+                                                                    egui::Color32::from_rgb(34, 211, 238),
                                                                     t.opt_install_title,
                                                                     t.opt_install_desc,
                                                                     self.keyboard_navigation_active && self.menu_selected_index == 0,
@@ -1042,7 +1108,7 @@ impl eframe::App for InstallerApp {
                                                                     ui,
                                                                     ctx,
                                                                     "2",
-                                                                    egui::Color32::from_rgb(56, 189, 248),
+                                                                    egui::Color32::from_rgb(168, 85, 247),
                                                                     t.opt_repair_title,
                                                                     t.opt_repair_desc,
                                                                     self.keyboard_navigation_active && self.menu_selected_index == 1,
@@ -1052,26 +1118,11 @@ impl eframe::App for InstallerApp {
                                                                 }
                                                                 ui.add_space(3.0);
 
-                                                                // 3. Move Installation
+                                                                // 3. Complete Reset (Move is not offered: setup.py moves only interactively)
                                                                 if render_menu_option(
                                                                     ui,
                                                                     ctx,
                                                                     "3",
-                                                                    egui::Color32::from_rgb(129, 140, 248),
-                                                                    t.opt_move_title,
-                                                                    t.opt_move_desc,
-                                                                    self.keyboard_navigation_active && self.menu_selected_index == 2,
-                                                                ) {
-                                                                    self.menu_selected_index = 2;
-                                                                    self.select_menu_option(2);
-                                                                }
-                                                                ui.add_space(3.0);
-
-                                                                // 4. Complete Reset
-                                                                if render_menu_option(
-                                                                    ui,
-                                                                    ctx,
-                                                                    "4",
                                                                     egui::Color32::from_rgb(251, 191, 36),
                                                                     t.opt_reset_title,
                                                                     t.opt_reset_desc,
@@ -1082,11 +1133,11 @@ impl eframe::App for InstallerApp {
                                                                 }
                                                                 ui.add_space(3.0);
 
-                                                                // 5. Uninstall
+                                                                // 4. Uninstall
                                                                 if render_menu_option(
                                                                     ui,
                                                                     ctx,
-                                                                    "5",
+                                                                    "4",
                                                                     egui::Color32::from_rgb(248, 113, 113),
                                                                     t.opt_uninstall_title,
                                                                     t.opt_uninstall_desc,
@@ -1102,7 +1153,7 @@ impl eframe::App for InstallerApp {
                                                                     egui::RichText::new("Developer Mode: Select Branch")
                                                                         .size(20.0)
                                                                         .strong()
-                                                                        .color(egui::Color32::from_rgb(147, 197, 253))
+                                                                        .color(egui::Color32::from_rgb(103, 232, 249))
                                                                 );
                                                                 ui.add_space(4.0);
                                                                 ui.label(
@@ -1148,17 +1199,17 @@ impl eframe::App for InstallerApp {
                                                                                 let is_hovered = resp.hovered() || ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| rect.contains(p)));
 
                                                                                 let bg_color = if is_selected {
-                                                                                    egui::Color32::from_rgb(45, 55, 72)
+                                                                                    egui::Color32::from_rgb(46, 36, 78)
                                                                                 } else if is_hovered {
-                                                                                    egui::Color32::from_rgb(38, 38, 38)
+                                                                                    egui::Color32::from_rgb(30, 30, 46)
                                                                                 } else {
-                                                                                    egui::Color32::from_rgb(28, 28, 28)
+                                                                                    egui::Color32::from_rgb(22, 22, 34)
                                                                                 };
 
                                                                                 let border_stroke = if is_selected {
-                                                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(147, 197, 253))
+                                                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(103, 232, 249))
                                                                                 } else {
-                                                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50))
+                                                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(44, 44, 64))
                                                                                 };
 
                                                                                 ui.painter().rect(rect, 4.0, bg_color, border_stroke);
@@ -1245,7 +1296,7 @@ impl eframe::App for InstallerApp {
                                                                     ui.label(
                                                                         egui::RichText::new(format!("Existing: {}", detected.display()))
                                                                             .size(11.5)
-                                                                            .color(egui::Color32::from_rgb(52, 211, 153))
+                                                                            .color(egui::Color32::from_rgb(34, 211, 238))
                                                                     );
                                                                 }
 
@@ -1254,8 +1305,8 @@ impl eframe::App for InstallerApp {
                                                                 // Czysty input ścieżki i przycisk Przeglądaj
                                                                 ui.horizontal(|ui| {
                                                                     egui::Frame::none()
-                                                                        .fill(egui::Color32::from_rgb(38, 38, 38))
-                                                                        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(68, 68, 68)))
+                                                                        .fill(egui::Color32::from_rgb(30, 30, 46))
+                                                                        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(62, 62, 88)))
                                                                         .inner_margin(egui::Margin::symmetric(10.0, 7.0))
                                                                         .rounding(3.0)
                                                                         .show(ui, |ui| {
@@ -1310,15 +1361,7 @@ impl eframe::App for InstallerApp {
                                                                             .size(13.5)
                                                                             .color(egui::Color32::from_gray(220))
                                                                     );
-                                                                    if self.has_auto_python_marker {
-                                                                        ui.add_space(14.0);
-                                                                        ui.checkbox(
-                                                                            &mut self.uninstall_system_python,
-                                                                            egui::RichText::new(t.checkbox_uninstall_python)
-                                                                                .size(13.0)
-                                                                                .color(egui::Color32::from_rgb(251, 191, 36))
-                                                                        );
-                                                                    }
+                                                                    // No "also uninstall Python" option: setup.py's uninstall never removes a system Python
                                                                 } else {
                                                                     ui.label(
                                                                         egui::RichText::new(t.confirm_reset_warn)
@@ -1338,28 +1381,28 @@ impl eframe::App for InstallerApp {
                                                             Screen::Progress => {
                                                                 let title = match self.action {
                                                                     Some(InstallAction::Repair) => match self.language {
-                                                                        Language::Pl => "Naprawianie BadWords...",
-                                                                        Language::De => "BadWords reparieren...",
-                                                                        Language::Es => "Reparando BadWords...",
-                                                                        Language::Fr => "Réparation de BadWords...",
-                                                                        Language::It => "Riparazione di BadWords...",
-                                                                        Language::Nl => "BadWords repareren...",
-                                                                        Language::Pt => "Reparando o BadWords...",
-                                                                        Language::Ru => "Восстановление BadWords...",
-                                                                        Language::Uk => "Відновлення BadWords...",
-                                                                        _ => "Repairing BadWords...",
+                                                                        Language::Pl => "Naprawianie StoryCraft...",
+                                                                        Language::De => "StoryCraft reparieren...",
+                                                                        Language::Es => "Reparando StoryCraft...",
+                                                                        Language::Fr => "Réparation de StoryCraft...",
+                                                                        Language::It => "Riparazione di StoryCraft...",
+                                                                        Language::Nl => "StoryCraft repareren...",
+                                                                        Language::Pt => "Reparando o StoryCraft...",
+                                                                        Language::Ru => "Восстановление StoryCraft...",
+                                                                        Language::Uk => "Відновлення StoryCraft...",
+                                                                        _ => "Repairing StoryCraft...",
                                                                     },
                                                                     Some(InstallAction::Move) => match self.language {
-                                                                        Language::Pl => "Przenoszenie BadWords...",
-                                                                        Language::De => "BadWords verschieben...",
-                                                                        Language::Es => "Moviendo BadWords...",
-                                                                        Language::Fr => "Déplacement de BadWords...",
-                                                                        Language::It => "Spostamento di BadWords...",
-                                                                        Language::Nl => "BadWords verplaatsen...",
-                                                                        Language::Pt => "Movendo o BadWords...",
-                                                                        Language::Ru => "Перемещение BadWords...",
-                                                                        Language::Uk => "Переміщення BadWords...",
-                                                                        _ => "Relocating BadWords...",
+                                                                        Language::Pl => "Przenoszenie StoryCraft...",
+                                                                        Language::De => "StoryCraft verschieben...",
+                                                                        Language::Es => "Moviendo StoryCraft...",
+                                                                        Language::Fr => "Déplacement de StoryCraft...",
+                                                                        Language::It => "Spostamento di StoryCraft...",
+                                                                        Language::Nl => "StoryCraft verplaatsen...",
+                                                                        Language::Pt => "Movendo o StoryCraft...",
+                                                                        Language::Ru => "Перемещение StoryCraft...",
+                                                                        Language::Uk => "Переміщення StoryCraft...",
+                                                                        _ => "Relocating StoryCraft...",
                                                                     },
                                                                     Some(InstallAction::Reset) => match self.language {
                                                                         Language::Pl => "Resetowanie i ponowna instalacja...",
@@ -1374,28 +1417,28 @@ impl eframe::App for InstallerApp {
                                                                         _ => "Resetting & Reinstalling...",
                                                                     },
                                                                     Some(InstallAction::Uninstall) => match self.language {
-                                                                        Language::Pl => "Odinstalowywanie BadWords...",
-                                                                        Language::De => "BadWords deinstallieren...",
-                                                                        Language::Es => "Desinstalando BadWords...",
-                                                                        Language::Fr => "Désinstallation de BadWords...",
-                                                                        Language::It => "Disinstallazione di BadWords...",
-                                                                        Language::Nl => "BadWords verwijderen...",
-                                                                        Language::Pt => "Desinstalando o BadWords...",
-                                                                        Language::Ru => "Удаление BadWords...",
-                                                                        Language::Uk => "Видалення BadWords...",
-                                                                        _ => "Uninstalling BadWords...",
+                                                                        Language::Pl => "Odinstalowywanie StoryCraft...",
+                                                                        Language::De => "StoryCraft deinstallieren...",
+                                                                        Language::Es => "Desinstalando StoryCraft...",
+                                                                        Language::Fr => "Désinstallation de StoryCraft...",
+                                                                        Language::It => "Disinstallazione di StoryCraft...",
+                                                                        Language::Nl => "StoryCraft verwijderen...",
+                                                                        Language::Pt => "Desinstalando o StoryCraft...",
+                                                                        Language::Ru => "Удаление StoryCraft...",
+                                                                        Language::Uk => "Видалення StoryCraft...",
+                                                                        _ => "Uninstalling StoryCraft...",
                                                                     },
                                                                     _ => match self.language {
-                                                                        Language::Pl => "Instalowanie BadWords...",
-                                                                        Language::De => "BadWords installieren...",
-                                                                        Language::Es => "Instalando BadWords...",
-                                                                        Language::Fr => "Installation de BadWords...",
-                                                                        Language::It => "Installazione di BadWords...",
-                                                                        Language::Nl => "BadWords installeren...",
-                                                                        Language::Pt => "Instalando o BadWords...",
-                                                                        Language::Ru => "Установка BadWords...",
-                                                                        Language::Uk => "Встановлення BadWords...",
-                                                                        _ => "Installing BadWords...",
+                                                                        Language::Pl => "Instalowanie StoryCraft...",
+                                                                        Language::De => "StoryCraft installieren...",
+                                                                        Language::Es => "Instalando StoryCraft...",
+                                                                        Language::Fr => "Installation de StoryCraft...",
+                                                                        Language::It => "Installazione di StoryCraft...",
+                                                                        Language::Nl => "StoryCraft installeren...",
+                                                                        Language::Pt => "Instalando o StoryCraft...",
+                                                                        Language::Ru => "Установка StoryCraft...",
+                                                                        Language::Uk => "Встановлення StoryCraft...",
+                                                                        _ => "Installing StoryCraft...",
                                                                     },
                                                                 };
                                                                 ui.heading(
@@ -1409,7 +1452,7 @@ impl eframe::App for InstallerApp {
                                                                 // Płynny, dwupoziomowy pasek postępu ze statusem przetłumaczonym na żywo na wybrany język
                                                                 let disp_title = i18n::translate_phrase(&self.status_title, self.language);
                                                                 let disp_details = i18n::translate_phrase(&self.status_details, self.language);
-                                                                render_badwords_dual_progress(
+                                                                render_storycraft_dual_progress(
                                                                     ui,
                                                                     ctx,
                                                                     self.displayed_progress,
@@ -1466,7 +1509,7 @@ impl eframe::App for InstallerApp {
 
                             // 3. STOPKA (55px, RGB 24, 24, 24)
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgb(24, 24, 24))
+                                .fill(egui::Color32::from_rgb(16, 16, 26))
                                 .rounding(0.0)
                                 .inner_margin(egui::Margin::symmetric(20.0, 11.5))
                                 .show(ui, |ui| {
@@ -1482,11 +1525,11 @@ impl eframe::App for InstallerApp {
 
                                         if is_lang_hover || self.language_dropdown_open {
                                             ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-                                            ui.painter().rect_filled(lang_rect, 3.0, egui::Color32::from_rgb(58, 58, 58));
+                                            ui.painter().rect_filled(lang_rect, 3.0, egui::Color32::from_rgb(52, 52, 74));
                                         } else {
-                                            ui.painter().rect_filled(lang_rect, 3.0, egui::Color32::from_rgb(44, 44, 44));
+                                            ui.painter().rect_filled(lang_rect, 3.0, egui::Color32::from_rgb(36, 36, 54));
                                         }
-                                        ui.painter().rect_stroke(lang_rect, 3.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(66, 66, 66)));
+                                        ui.painter().rect_stroke(lang_rect, 3.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 84)));
 
                                         ui.painter().text(
                                             lang_rect.center(),
@@ -1526,8 +1569,8 @@ impl eframe::App for InstallerApp {
                                                     .order(egui::Order::Foreground)
                                                     .show(ctx, |ui| {
                                                         egui::Frame::none()
-                                                            .fill(egui::Color32::from_rgb(34, 34, 34))
-                                                            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(66, 66, 66)))
+                                                            .fill(egui::Color32::from_rgb(27, 27, 41))
+                                                            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 84)))
                                                             .rounding(3.0)
                                                             .inner_margin(egui::Margin::symmetric(3.0, popup_pad))
                                                             .show(ui, |ui| {
@@ -1543,7 +1586,7 @@ impl eframe::App for InstallerApp {
 
                                                                     if is_item_hover {
                                                                         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-                                                                        ui.painter().rect_filled(item_rect, 2.0, egui::Color32::from_rgb(54, 54, 54));
+                                                                        ui.painter().rect_filled(item_rect, 2.0, egui::Color32::from_rgb(48, 48, 70));
                                                                     } else if is_curr {
                                                                         ui.painter().rect_filled(item_rect, 2.0, egui::Color32::from_white_alpha(20));
                                                                     }
@@ -1675,7 +1718,7 @@ impl eframe::App for InstallerApp {
                                                     };
                                                     if custom_button(ui, ctx, [100.0, 32.0], finish_label) {
                                                         if !is_error && self.launch_on_finish && self.action == Some(InstallAction::InstallUpdate) {
-                                                            launch_installed_badwords(&self.current_target_path());
+                                                            launch_installed_storycraft(&self.current_target_path());
                                                         }
                                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                                     }
@@ -1691,7 +1734,7 @@ impl eframe::App for InstallerApp {
 }
 
 /// Rysuje podwójny, animowany pasek postępu Liquid ze statusem POD każdym paskiem
-fn render_badwords_dual_progress(
+fn render_storycraft_dual_progress(
     ui: &mut egui::Ui,
     ctx: &egui::Context,
     main_progress: f32,
@@ -1706,16 +1749,16 @@ fn render_badwords_dual_progress(
     let pct_str = format!("{:.0}%", (main_progress * 100.0).clamp(0.0, 100.0));
     let (main_rect, _) = ui.allocate_exact_size(egui::vec2(width, 10.0), egui::Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(main_rect, 5.0, egui::Color32::from_rgb(26, 26, 26));
-    painter.rect_stroke(main_rect, 5.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(48, 48, 48)));
+    painter.rect_filled(main_rect, 5.0, egui::Color32::from_rgb(18, 18, 29));
+    painter.rect_stroke(main_rect, 5.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 42, 62)));
 
     let clamped_main = main_progress.clamp(0.0, 1.0);
     if clamped_main > 0.005 {
         let fill_w = (main_rect.width() * clamped_main).max(8.0);
         let fill_rect = egui::Rect::from_min_size(main_rect.min, egui::vec2(fill_w, main_rect.height()));
 
-        let start_col = egui::Color32::from_rgb(26, 122, 62);
-        let end_col = egui::Color32::from_rgb(184, 208, 53);
+        let start_col = egui::Color32::from_rgb(34, 211, 238);
+        let end_col = egui::Color32::from_rgb(168, 85, 247);
 
         let mut mesh = egui::Mesh::default();
         mesh.colored_vertex(fill_rect.left_top(), start_col);
@@ -1782,7 +1825,7 @@ fn render_badwords_dual_progress(
         egui::Align2::RIGHT_TOP,
         pct_str,
         egui::FontId::proportional(13.0),
-        egui::Color32::from_rgb(184, 208, 53),
+        egui::Color32::from_rgb(168, 85, 247),
     );
 
     ui.add_space(14.0);
@@ -1791,11 +1834,11 @@ fn render_badwords_dual_progress(
     {
         let (sub_rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(sub_rect, 3.0, egui::Color32::from_rgb(22, 22, 22));
-        painter.rect_stroke(sub_rect, 3.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 42, 42)));
+        painter.rect_filled(sub_rect, 3.0, egui::Color32::from_rgb(14, 14, 23));
+        painter.rect_stroke(sub_rect, 3.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 34, 51)));
 
-        let sub_start = egui::Color32::from_rgb(26, 122, 62);
-        let sub_end = egui::Color32::from_rgb(184, 208, 53);
+        let sub_start = egui::Color32::from_rgb(34, 211, 238);
+        let sub_end = egui::Color32::from_rgb(168, 85, 247);
 
         let clamped_sub = sub_progress.clamp(0.0, 1.0);
         if clamped_sub > 0.01 && clamped_sub <= 1.0 {
@@ -1892,11 +1935,11 @@ fn custom_button(ui: &mut egui::Ui, ctx: &egui::Context, size: [f32; 2], text: &
 
     if is_hovered {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(58, 58, 58));
+        ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(52, 52, 74));
     } else {
-        ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(44, 44, 44));
+        ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(36, 36, 54));
     }
-    ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(66, 66, 66)));
+    ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 84)));
 
     ui.painter().text(
         rect.center(),

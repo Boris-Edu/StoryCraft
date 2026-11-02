@@ -38,9 +38,9 @@ fn main() {
     #[cfg(windows)]
     {
         let mut res = winres::WindowsResource::new();
-        res.set_icon("../assets/icons/icon_default.ico");
-        res.set("ProductName", "BadWords");
-        res.set("FileDescription", "BadWords Setup");
+        res.set_icon("../assets/brand/favicon.ico");
+        res.set("ProductName", "StoryCraft");
+        res.set("FileDescription", "StoryCraft Setup");
         res.set("LegalCopyright", "Copyright (c) 2026 Szymon Wolarz");
 
         if let Some(ref ver) = detected_version {

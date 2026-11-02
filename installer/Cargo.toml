@@ -1,9 +1,9 @@
 [package]
-name = "badwords-installer"
+name = "storycraft-installer"
 version = "4.0.0"
 edition = "2021"
-authors = ["Szymon Wolarz"]
-description = "Modern Webview Installer for BadWords"
+authors = ["Szymon Wolarz", "Boris-Edu"]
+description = "StoryCraft Setup: a window over setupfiles/setup.py (based on the BadWords installer by Szymon Wolarz)"
 
 [dependencies]
 eframe = "0.27"

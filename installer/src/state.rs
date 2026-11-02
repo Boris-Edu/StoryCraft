@@ -24,7 +24,7 @@ pub struct IpcEvent {
 pub type EventSender = Sender<IpcEvent>;
 
 pub fn log_file_path() -> PathBuf {
-    std::env::temp_dir().join("badwords_setup.log")
+    std::env::temp_dir().join("storycraft_setup.log")
 }
 
 fn append_to_logfile(line: &str) {
