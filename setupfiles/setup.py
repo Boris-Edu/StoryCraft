@@ -1766,7 +1766,8 @@ Keywords=davinci;resolve;subtitles;ai;whisper;
                 except Exception:
                     pass
 
-        subprocess.run(["update-desktop-database", apps_dir], capture_output=True)
+        if shutil.which("update-desktop-database"):  # missing on minimal distros; the menu entry works without it
+            subprocess.run(["update-desktop-database", apps_dir], capture_output=True)
 
     elif sys.platform == "darwin":
         home = os.path.expanduser("~")
@@ -2123,8 +2124,9 @@ def option_install_update(force_main=False, preset_path=None, title="── Stan
 
     # Shortcuts options
     if ARGS.non_interactive:
-        create_desktop = True
-        create_menu = True
+        # The setup app passes its two checkboxes through these (unset = create both)
+        create_desktop = os.environ.get("STORYCRAFT_DESKTOP_SHORTCUT", "1") != "0"
+        create_menu = os.environ.get("STORYCRAFT_MENU_SHORTCUT", "1") != "0"
     else:
         console.print(Text(f"{PAD}Create Desktop shortcut? [Y/n]: ", style="cyan"), end="", no_wrap=True)
         sys.stdout.flush()
@@ -2160,7 +2162,7 @@ def option_install_update(force_main=False, preset_path=None, title="── Stan
         console.print(Text(f"{PAD}  1. Run the installer as Administrator", style='cyan'), no_wrap=True)
         console.print(Text(f"{PAD}  2. Use the default path (press Enter at path prompt)", style='cyan'), no_wrap=True)
         pause()
-        return
+        return False
 
     venv_dir  = os.path.join(install_dir, "venv")
     libs_link = os.path.join(install_dir, "libs")
@@ -2210,7 +2212,7 @@ def option_install_update(force_main=False, preset_path=None, title="── Stan
             if not dl_ok:
                 log_err("Download failed.")
                 pause()
-                return
+                return False
             sp_ex = Spinner("Extracting release archive").start()
             import zipfile
             with zipfile.ZipFile(zip_path) as z:
@@ -2240,12 +2242,12 @@ def option_install_update(force_main=False, preset_path=None, title="── Stan
             else:
                 log_err("Could not find src/ in downloaded archive.")
                 pause()
-                return
+                return False
 
         if not source_path or not os.path.isfile(os.path.join(source_path, "main.py")):
             log_err("main.py not found in source. Aborting.")
             pause()
-            return
+            return False
 
         # ── GPU detection ─────────────────────────────────────
         console.print()
@@ -2649,6 +2651,18 @@ def option_install_update(force_main=False, preset_path=None, title="── Stan
                     _venv_ok = True
                 except Exception as e:
                     debug_log(f"virtualenv fallback also failed: {e}")
+
+            # A system Python without venv (Debian/Ubuntu without python3-venv): use the portable
+            # Python the bootstrap brought rather than stopping
+            boot_py = ARGS.bootstrap_python
+            if not _venv_ok and boot_py and os.path.abspath(boot_py) != os.path.abspath(target_py) and _is_py_compatible(boot_py):
+                log_warn(f"{target_py} can't create a virtual environment; using the installer's Python instead.")
+                shutil.rmtree(venv_dir, ignore_errors=True)
+                try:
+                    subprocess.run([boot_py, "-m", "venv", venv_dir], check=True, capture_output=True, **_sp_hidden_kwargs())
+                    _venv_ok = True
+                except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+                    debug_log(f"venv with the bootstrap Python failed too: {e}")
 
             if _venv_ok:
                 log_ok("Virtual environment created.")
@@ -3819,8 +3833,8 @@ def main():
         option_reset(preset_path=target)
         sys.exit(0)
     elif ARGS.install:
-        option_install_update(preset_path=ARGS.install)
-        sys.exit(0)
+        # A failed install exits 1, so the setup app (and scripts) can tell it apart from success
+        sys.exit(1 if option_install_update(preset_path=ARGS.install) is False else 0)
 
     # One-time setup: resize + title + lock scrollbar + Quick Edit
     _resize()
