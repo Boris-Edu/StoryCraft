@@ -87,7 +87,7 @@ def load_app_version(install_dir=None):
                         return m.group(1).strip()
             except Exception:
                 pass
-    return "4.0.0"
+    return "4.0.1"
 
 UPDATER_VERSION = load_app_version()
 UPDATER_BUILD   = 2026090602

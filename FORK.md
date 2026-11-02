@@ -82,6 +82,7 @@ Status: **Merged upstream** = accepted into the original project. **Upstream PR*
 | Speech-to-text benchmark for Mac (faster-whisper vs mlx-whisper vs Apple Speech), on branch [`feat/mac-asr-benchmark`](https://github.com/Boris-Edu/StoryCraft/tree/feat/mac-asr-benchmark/tools/asr_benchmark) | Fork only |
 
 ## Changelog
+- **2026-11-02:** v4.0.1: StoryCraft Setup (graphical installer, downloads on the release page), opt-in usage stats for the original author, Linux installer fixes (no python3-venv, missing update-desktop-database, failed installs now exit 1).
 - **2026-11-02:** first public release, v4.0.0 (the website is not part of the download). PRs #9–#15 merged into BadWords; #16 open.
 - **2026-10-31 (local):** UI revamp started: Keep / Mark / Cut for pauses, Play edit (jumping, then smooth rendered preview), Story board, workflow bar with Send to Resolve, Keep / Mark / Cut for colours, colour themes, refreshed layout and theme fonts; renamed StoryCraft with its own identity.
 - **2026-10-31:** fork published with the fixes and features above; PRs #9–#16 offered upstream.

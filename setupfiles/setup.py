@@ -106,7 +106,7 @@ def _get_app_version():
                                     return ver
             except Exception:
                 pass
-    return "4.0.0"
+    return "4.0.1"
 
 APP_VERSION = _get_app_version()
 
