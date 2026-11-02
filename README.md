@@ -62,6 +62,8 @@ curl -fsSL "https://raw.githubusercontent.com/Boris-Edu/StoryCraft/fork/setupfil
 
 **Prefer a window?** Download StoryCraft Setup, which runs the same installer step by step: [macOS](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/StoryCraft-Setup-macOS.zip) (unzip and open it; the first time, allow it in System Settings → Privacy & Security → Open Anyway) · [Windows](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-windows.exe) (SmartScreen: More info → Run anyway) · [Linux](https://github.com/Boris-Edu/StoryCraft/releases/latest/download/storycraft-setup-linux) (`chmod +x`, then run). It isn't code-signed yet, hence the extra confirmation.
 
+<p align="center"><img src="website/assets/shots/setup-menu.jpg" alt="StoryCraft Setup, the main menu: Fresh install / update, Repair, Reset and Uninstall StoryCraft" width="520"></p>
+
 The scripts are plain text in [setupfiles/](setupfiles): read them before running them. StoryCraft is developed and tested on macOS with Apple Silicon and DaVinci Resolve Studio; Windows and Linux use the same installer but are untested.
 
 **Requirements**

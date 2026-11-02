@@ -322,6 +322,9 @@ code { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
 .dl { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 14px; margin: 14px 0 0; color: var(--muted); font-size: 14px; }
 .dl[hidden] { display: none; }
 .dl code { color: var(--text); }
+.setup-shot { margin: 30px auto 0; max-width: 520px; text-align: center; }
+.setup-shot img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 24px 60px -24px rgba(168, 85, 247, .45); }
+.setup-shot figcaption { margin-top: 10px; color: var(--muted); font-size: 14px; }
 .reqs { margin: 26px 0 0; padding-left: 20px; color: var(--muted); display: grid; gap: 8px; font-size: 15px; }
 .reqs b { color: var(--text); }
 

@@ -74,6 +74,9 @@ fn main() -> eframe::Result<()> {
     let (total_w, total_h) = (650.0, 550.0);
     #[cfg(not(target_os = "macos"))]
     let (total_w, total_h) = (706.0, 606.0);
+    // Development aid: STORYCRAFT_SETUP_SCREENSHOT_SCALE=2 renders the window at 2x for sharp screenshots
+    let shot_scale: f32 = std::env::var("STORYCRAFT_SETUP_SCREENSHOT_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let (total_w, total_h) = (total_w * shot_scale, total_h * shot_scale);
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([total_w, total_h])
@@ -107,6 +110,7 @@ fn main() -> eframe::Result<()> {
             visuals.hyperlink_color = egui::Color32::from_rgb(34, 211, 238);
             visuals.extreme_bg_color = egui::Color32::from_rgb(11, 11, 20);
             cc.egui_ctx.set_visuals(visuals);
+            cc.egui_ctx.set_zoom_factor(shot_scale);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Box::new(InstallerApp::new_with_args(&app_args))
         }),
