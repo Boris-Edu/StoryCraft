@@ -125,7 +125,7 @@
     "about_original_repo": "Oryginalny projekt",
     "about_support_author": "Wesprzyj autora oryginału",
     "about_privacy_title": "Prywatność",
-    "about_privacy": "StoryCraft nie wysyła danych o użyciu. Transkrypcja działa na tym komputerze (albo w Twoim DaVinci Resolve). Tekst trafia do AI tylko wtedy, gdy sam go tam skopiujesz albo podłączysz własną aplikację Claude.",
+    "about_privacy": "StoryCraft nic nie wysyła, chyba że włączysz poniżej sygnał użycia: jeden anonimowy sygnał na wersję do statystyk autora oryginału, bez lokalizacji i bez niczego z Twoich projektów. Transkrypcja działa na tym komputerze (albo w Twoim DaVinci Resolve). Tekst trafia do AI tylko wtedy, gdy sam go tam skopiujesz albo podłączysz własną aplikację Claude.",
     "about_data_title": "Twoje dane",
     "about_open_data": "Otwórz folder",
     "about_repo": "StoryCraft na GitHubie",
@@ -672,5 +672,10 @@
     "lbl_force_xml_assembly": "Wymuś składanie przez XML",
     "tt_force_xml_assembly": "Wymusza składanie osi czasu za pomocą FCP7 XML zamiast natywnego DRT. Przydatne do testowania składania XML lub na darmowym DaVinci Resolve 21.1+.",
     "status_assembly_drt_build": "Budowanie montażu DRT...",
-    "status_assembly_drt_import": "Importowanie osi czasu DRT..."
+    "status_assembly_drt_import": "Importowanie osi czasu DRT...",
+    "stats_title": "Pomóż policzyć użytkowników StoryCraft",
+    "stats_msg": "StoryCraft powstał na bazie BadWords Szymona Wolarza, który chciałby wiedzieć, ile osób go używa.\n\nJeśli się zgodzisz, StoryCraft wyśle jeden anonimowy sygnał na wersję do jego statystyk (PostHog, serwery w UE): wersję StoryCraft, Twój system operacyjny, czy to nowa instalacja czy aktualizacja, oraz losowy identyfikator utworzony na tym komputerze.\n\nNic więcej: bez lokalizacji, bez transkrypcji, bez nazw plików i projektów, bez multimediów.\n\nMożesz to zmienić w każdej chwili w Ustawienia → O StoryCraft.",
+    "stats_yes": "Tak, policz mnie",
+    "stats_no": "Nie, dziękuję",
+    "about_stats_toggle": "Wysyłaj jeden anonimowy sygnał na wersję do autora oryginału (wersja StoryCraft, system operacyjny, nowa instalacja lub aktualizacja)"
 }

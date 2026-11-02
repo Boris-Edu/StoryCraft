@@ -125,7 +125,7 @@
     "about_original_repo": "Progetto originale",
     "about_support_author": "Sostieni l'autore originale",
     "about_privacy_title": "Privacy",
-    "about_privacy": "StoryCraft non invia dati di utilizzo. La trascrizione avviene su questo computer (o nel tuo DaVinci Resolve). Il testo arriva a un'IA solo se lo copi tu o colleghi la tua app Claude.",
+    "about_privacy": "StoryCraft non invia nulla a meno che tu non attivi il ping d'uso qui sotto: un ping anonimo per versione alle statistiche dell'autore originale, senza posizione e senza nulla dei tuoi progetti. La trascrizione avviene su questo computer (o nel tuo DaVinci Resolve). Il testo arriva a un'IA solo se lo copi tu o colleghi la tua app Claude.",
     "about_data_title": "I tuoi dati",
     "about_open_data": "Apri cartella",
     "about_repo": "StoryCraft su GitHub",
@@ -672,5 +672,10 @@
     "tt_force_xml_assembly": "Forza l'assemblaggio della timeline utilizzando la pipeline XML FCP7 invece del DRT nativo.",
     "status_assembly_drt_build": "Costruzione del montaggio DRT...",
     "status_assembly_drt_import": "Importazione timeline DRT...",
-    "lbl_timeline_ready": "A1: Pronto per l'audio della timeline"
+    "lbl_timeline_ready": "A1: Pronto per l'audio della timeline",
+    "stats_title": "Aiuta a contare gli utenti di StoryCraft",
+    "stats_msg": "StoryCraft è basato su BadWords di Szymon Wolarz, che vorrebbe sapere quante persone lo usano.\n\nSe accetti, StoryCraft invia un ping anonimo per versione alle sue statistiche (PostHog, server nell'UE): la versione di StoryCraft, il tuo sistema operativo, se è una nuova installazione o un aggiornamento, e un ID casuale creato su questo computer.\n\nNient'altro: nessuna posizione, nessuna trascrizione, nessun nome di file o progetto, nessun media.\n\nPuoi cambiare scelta quando vuoi in Impostazioni → Informazioni su StoryCraft.",
+    "stats_yes": "Sì, contami",
+    "stats_no": "No, grazie",
+    "about_stats_toggle": "Invia un ping anonimo per versione all'autore originale (versione di StoryCraft, sistema operativo, nuova installazione o aggiornamento)"
 }

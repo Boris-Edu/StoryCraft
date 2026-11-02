@@ -54,55 +54,48 @@ class PreferencesMixin:
 
     def send_telemetry_ping(self, event_name="app_started"):
         """
-        Asynchronously sends a telemetry ping to PostHog.
-        Only sends with user consent and only once per version.
+        Asynchronously sends StoryCraft's usage ping to PostHog (the original author's project).
+        Only with the user's consent (stats_opt_in), once per version, with a random ID,
+        tagged app=storycraft and without location.
         """
-        if not getattr(config, "TELEMETRY_ENABLED", True):
+        if not getattr(config, "USAGE_STATS_ENABLED", False):
             return
         try:
             # 1. Check opt-in flag — account for string parsing from JSON
-            opt_in = self.os_doc.get_telemetry_pref("telemetry_opt_in")
+            opt_in = self.os_doc.get_telemetry_pref("stats_opt_in")
             if opt_in not in [True, "True", "true", 1, "1"]:
-                log_info("Telemetry: Oczekuje na zgode lub zgoda zostala odrzucona.")
-                return 
-            
-            last_ping = self.os_doc.get_telemetry_pref("last_pinged_version")
+                log_info("Usage stats: not agreed (or not asked yet), nothing sent.")
+                return
+
+            last_ping = self.os_doc.get_telemetry_pref("stats_last_version")
             current_version = config.VERSION
-            
+
             if last_ping == current_version:
-                log_info(f"Telemetry: Ping for version {current_version} already sent. Skipping.")
-                return 
+                log_info(f"Usage stats: ping for version {current_version} already sent. Skipping.")
+                return
 
             if getattr(self, "_telemetry_pinging", False):
-                log_info("Telemetry: Ping attempt already in progress. Skipping duplicate thread.")
+                log_info("Usage stats: ping already in progress. Skipping duplicate thread.")
                 return
-                
+
             self._telemetry_pinging = True
-            
-            # Global marker allowing identification as "Update" even after full app removal
-            global_marker = os.path.join(self.os_doc.home_dir, ".badwords_installed")
-            
-            if not last_ping:
-                if os.path.exists(global_marker):
-                    install_type = "Update"
-                else:
-                    install_type = "New Install"
-                    try:
-                        with open(global_marker, "w", encoding="utf-8") as f:
-                            f.write(current_version)
-                    except Exception: pass
-            else:
-                install_type = "Update"
-                try:
-                    if not os.path.exists(global_marker):
-                        with open(global_marker, "w", encoding="utf-8") as f:
-                            f.write(current_version)
-                except Exception: pass
-                
-            uuid_str = self.os_doc.get_telemetry_pref("analytics_uuid") or "unknown"
-            allow_geo = self.os_doc.get_telemetry_pref("telemetry_allow_geo")
-            machine_id = self.os_doc.get_telemetry_pref("analytics_uuid") or ""
-            
+
+            # Marker in the user's StoryCraft folder (kept on uninstall), so a reinstall counts as an update
+            marker = os.path.join(self.os_doc.saves_dir, ".stats_installed")
+            install_type = "Update" if (last_ping or os.path.exists(marker)) else "New Install"
+            try:
+                if not os.path.exists(marker):
+                    with open(marker, "w", encoding="utf-8") as f:
+                        f.write(current_version)
+            except Exception: pass
+
+            # Random, made once on opt-in: not derived from the machine, so it can't be matched to BadWords' ID
+            stats_id = self.os_doc.get_telemetry_pref("stats_id")
+            if not stats_id:
+                import uuid
+                stats_id = str(uuid.uuid4())
+                self.os_doc.set_telemetry_pref("stats_id", stats_id)
+
             def _ping_thread():
                 import ssl
                 try:
@@ -110,22 +103,19 @@ class PreferencesMixin:
                     payload = {
                         "api_key": getattr(config, "POSTHOG_API_KEY", ""),
                         "event": event_name,
-                        "distinct_id": uuid_str, 
+                        "distinct_id": stats_id,
                         "properties": {
-                            "distinct_id": uuid_str,
+                            "distinct_id": stats_id,
+                            "app": getattr(config, "USAGE_STATS_APP", "storycraft"),
                             "version": current_version,
                             "os": self.os_doc.os_type,
                             "install_type": install_type,
-                            "$lib": "urllib_python"
+                            "$lib": "urllib_python",
+                            "$geoip_disable": True,             # no country / city
+                            "$process_person_profile": False,   # anonymous event, no person profile
                         }
                     }
-                    if not allow_geo:
-                        payload["properties"]["$geoip_disable"] = True
-                    
-                    if machine_id == "762c22f5-0dbe-8238-43d4-31c0d0d33d5a":
-                        payload["properties"]["is_dev_env"] = True
-                        log_info("Dev environment recognized. Telemetry ping flagged as is_dev_env.")
-                    
+
                     if not payload["api_key"] or "TUTAJ_WKLEISZ" in payload["api_key"]:
                         log_info("Telemetry skip: Default/Empty API Key in config.")
                         return
@@ -150,8 +140,8 @@ class PreferencesMixin:
                     
                     with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
                         if response.getcode() == 200:
-                            self.os_doc.set_telemetry_pref("last_pinged_version", current_version)
-                            log_info(f"Telemetry ping sent successfully ({install_type} - {current_version}).")
+                            self.os_doc.set_telemetry_pref("stats_last_version", current_version)
+                            log_info(f"Usage stats ping sent successfully ({install_type} - {current_version}).")
                         else:
                             log_error(f"Telemetry ping failed with HTTP code {response.getcode()}")
                 except Exception as e:

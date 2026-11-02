@@ -804,9 +804,23 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
             para(self.txt("about_credit"), _SC_MUTED, 9.5),
             para(link("https://github.com/veritus-git/BadWords", self.txt("about_original_repo")) + " &nbsp;·&nbsp; "
                  + link("https://buymeacoffee.com/badwords", self.txt("about_support_author")), size=9.5)))
-        lay.addWidget(card(
-            para(f"<b>{self.txt('about_privacy_title')}</b>", _SC_TEXT_HI),
-            para(self.txt("about_privacy"), _SC_MUTED, 9.5)))
+        privacy = [para(f"<b>{self.txt('about_privacy_title')}</b>", _SC_TEXT_HI),
+                   para(self.txt("about_privacy"), _SC_MUTED, 9.5)]
+        if getattr(config, "USAGE_STATS_ENABLED", False):
+            # The one choice asked at first start, changeable here (saved with Apply)
+            stats_row = QWidget()
+            sl = QHBoxLayout(stats_row)
+            sl.setContentsMargins(0, config.S(6), 0, 0)
+            sl.setSpacing(config.S(10))
+            sl.addWidget(para(self.txt("about_stats_toggle"), _SC_TEXT, 9.5), 1)
+            self.tgl_usage_stats = ToggleSwitch()
+            self.tgl_usage_stats.setChecked(self.engine.os_doc.get_telemetry_pref("stats_opt_in") is True, animated=False)
+            # Saved only once flipped: "not asked yet" stays not asked, so the first-start question still comes
+            self._stats_touched = False
+            self.tgl_usage_stats.toggled.connect(lambda _v: setattr(self, "_stats_touched", True))
+            sl.addWidget(self.tgl_usage_stats, 0, Qt.AlignVCenter)
+            privacy.append(stats_row)
+        lay.addWidget(card(*privacy))
         saves = self.engine.os_doc.get_saves_folder()
         btn_open = QPushButton(self.txt("about_open_data"))
         btn_open.setObjectName("btn_ghost_sm")
@@ -2912,6 +2926,8 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
             'custom_markers':     getattr(self, 'current_custom_markers', old_prefs.get('custom_markers', [])),
             'telemetry_opt_in':   self._safe_get('chk_telemetry_opt_in', bool(old_prefs.get('telemetry_opt_in', False)), 'isChecked'),
             'telemetry_geo':      self._safe_get('chk_telemetry_geo', bool(old_prefs.get('telemetry_geo', False)), 'isChecked'),
+            'stats_opt_in':       (self._safe_get('tgl_usage_stats', old_prefs.get('stats_opt_in'), 'isChecked')
+                                   if getattr(self, '_stats_touched', False) else old_prefs.get('stats_opt_in')),
             'view_mode':          view_mode,
             'editor_font_family': self._safe_get('combo_font', old_prefs.get('editor_font_family', config.UI_FONT_NAME), 'currentText'),
             'editor_font_size':   self._safe_get('spin_fsize', old_prefs.get('editor_font_size', 12), 'value'),
@@ -3083,6 +3099,8 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
             restart_needed = True
 
         self.engine.save_preferences(new_prefs)
+        if new_prefs.get('stats_opt_in') is True and old_prefs.get('stats_opt_in') is not True:
+            self.engine.send_telemetry_ping("app_started")  # just agreed in About: once per version, as at start
         self.initial_prefs = self.engine.load_preferences() or {}
         self._initial_state = self._get_current_state_dict()
         self.btn_apply.setText(self.txt("txt_saved"))

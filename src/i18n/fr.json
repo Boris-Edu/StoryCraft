@@ -125,7 +125,7 @@
     "about_original_repo": "Projet d'origine",
     "about_support_author": "Soutenir l'auteur d'origine",
     "about_privacy_title": "Confidentialité",
-    "about_privacy": "StoryCraft n'envoie aucune donnée d'utilisation. La transcription se fait sur cet ordinateur (ou dans ton DaVinci Resolve). Le texte n'atteint une IA que si tu l'y copies toi-même ou connectes ta propre app Claude.",
+    "about_privacy": "StoryCraft n'envoie rien, sauf si tu actives le signal d'utilisation ci-dessous : un signal anonyme par version vers les statistiques de l'auteur d'origine, sans localisation ni rien de tes projets. La transcription se fait sur cet ordinateur (ou dans ton DaVinci Resolve). Le texte n'atteint une IA que si tu l'y copies toi-même ou connectes ta propre app Claude.",
     "about_data_title": "Tes données",
     "about_open_data": "Ouvrir le dossier",
     "about_repo": "StoryCraft sur GitHub",
@@ -672,5 +672,10 @@
     "tt_force_xml_assembly": "Force l'assemblage de la timeline à utiliser le pipeline XML FCP7 au lieu du DRT natif.",
     "status_assembly_drt_build": "Construction de l'assemblage DRT...",
     "status_assembly_drt_import": "Importation de la timeline DRT...",
-    "lbl_timeline_ready": "A1: Prêt pour l'audio de la timeline"
+    "lbl_timeline_ready": "A1: Prêt pour l'audio de la timeline",
+    "stats_title": "Aider à compter les utilisateurs de StoryCraft",
+    "stats_msg": "StoryCraft est basé sur BadWords de Szymon Wolarz, qui aimerait savoir combien de personnes l'utilisent.\n\nSi tu es d'accord, StoryCraft envoie un signal anonyme par version à ses statistiques (PostHog, serveurs dans l'UE) : la version de StoryCraft, ton système d'exploitation, s'il s'agit d'une nouvelle installation ou d'une mise à jour, et un identifiant aléatoire créé sur cet ordinateur.\n\nRien d'autre : pas de localisation, pas de transcriptions, pas de noms de fichiers ou de projets, aucun média.\n\nTu peux changer ce choix à tout moment dans Paramètres → À propos de StoryCraft.",
+    "stats_yes": "Oui, comptez-moi",
+    "stats_no": "Non merci",
+    "about_stats_toggle": "Envoyer un signal anonyme par version à l'auteur d'origine (version de StoryCraft, système, nouvelle installation ou mise à jour)"
 }

@@ -125,7 +125,7 @@
     "about_original_repo": "Origineel project",
     "about_support_author": "Steun de oorspronkelijke maker",
     "about_privacy_title": "Privacy",
-    "about_privacy": "StoryCraft verstuurt geen gebruiksgegevens. Transcriptie gebeurt op deze computer (of in je eigen DaVinci Resolve). Tekst bereikt een AI alleen als je hem er zelf naartoe kopieert of je eigen Claude-app koppelt.",
+    "about_privacy": "StoryCraft verstuurt niets, tenzij je hieronder de gebruiksping aanzet: één anonieme ping per versie naar de statistieken van de oorspronkelijke auteur, zonder locatie en zonder iets uit je projecten. Transcriptie gebeurt op deze computer (of in je eigen DaVinci Resolve). Tekst bereikt een AI alleen als je hem er zelf naartoe kopieert of je eigen Claude-app koppelt.",
     "about_data_title": "Je gegevens",
     "about_open_data": "Map openen",
     "about_repo": "StoryCraft op GitHub",
@@ -672,5 +672,10 @@
     "tt_force_xml_assembly": "Forceert tijdlijnassemblage via de FCP7 XML-pijplijn in plaats van native DRT.",
     "status_assembly_drt_build": "DRT-montage opbouwen...",
     "status_assembly_drt_import": "DRT-tijdlijn importeren...",
-    "lbl_timeline_ready": "A1: Gereed voor tijdlijnaudio"
+    "lbl_timeline_ready": "A1: Gereed voor tijdlijnaudio",
+    "stats_title": "Help StoryCraft-gebruikers tellen",
+    "stats_msg": "StoryCraft is gebaseerd op BadWords van Szymon Wolarz, en hij wil graag weten hoeveel mensen het gebruiken.\n\nAls je akkoord gaat, stuurt StoryCraft per versie één anonieme ping naar zijn statistieken (PostHog, servers in de EU): de StoryCraft-versie, je besturingssysteem, of het een nieuwe installatie of een update is, en een willekeurige ID die op deze computer is gemaakt.\n\nVerder niets: geen locatie, geen transcripties, geen bestands- of projectnamen, geen media.\n\nJe kunt dit altijd wijzigen in Instellingen → Over StoryCraft.",
+    "stats_yes": "Ja, tel me mee",
+    "stats_no": "Nee, bedankt",
+    "about_stats_toggle": "Per versie één anonieme ping naar de oorspronkelijke auteur sturen (StoryCraft-versie, besturingssysteem, nieuwe installatie of update)"
 }

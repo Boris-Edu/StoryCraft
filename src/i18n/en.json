@@ -125,7 +125,7 @@
     "about_original_repo": "Original project",
     "about_support_author": "Support the original author",
     "about_privacy_title": "Privacy",
-    "about_privacy": "StoryCraft sends no usage data. Transcription runs on this computer (or in your own DaVinci Resolve). Text only reaches an AI when you copy it there yourself or connect your own Claude app.",
+    "about_privacy": "StoryCraft sends nothing unless you turn on the usage ping below: one anonymous ping per version to the original author's analytics, with no location and nothing from your projects. Transcription runs on this computer (or in your own DaVinci Resolve). Text only reaches an AI when you copy it there yourself or connect your own Claude app.",
     "about_data_title": "Your data",
     "about_open_data": "Open folder",
     "about_repo": "StoryCraft on GitHub",
@@ -672,5 +672,10 @@
     "lbl_force_xml_assembly": "Force XML Timeline Assembly",
     "tt_force_xml_assembly": "Forces timeline assembly to use the FCP7 XML pipeline instead of native DRT. Useful for testing XML assembly or on Resolve 21.1+ Free.",
     "status_assembly_drt_build": "Building DRT assembly...",
-    "status_assembly_drt_import": "Importing DRT timeline..."
+    "status_assembly_drt_import": "Importing DRT timeline...",
+    "stats_title": "Help count StoryCraft users",
+    "stats_msg": "StoryCraft is built on BadWords by Szymon Wolarz, and he'd like to know how many people use it.\n\nIf you agree, StoryCraft sends one anonymous ping per version to his analytics (PostHog, EU servers): the StoryCraft version, your operating system, whether it's a new install or an update, and a random ID made on this computer.\n\nNothing else: no location, no transcripts, no file or project names, no media.\n\nYou can change this anytime in Settings → About StoryCraft.",
+    "stats_yes": "Yes, count me",
+    "stats_no": "No thanks",
+    "about_stats_toggle": "Send one anonymous ping per version to the original author (StoryCraft version, operating system, new install or update)"
 }

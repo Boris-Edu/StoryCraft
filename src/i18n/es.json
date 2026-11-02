@@ -125,7 +125,7 @@
     "about_original_repo": "Proyecto original",
     "about_support_author": "Apoyar al autor original",
     "about_privacy_title": "Privacidad",
-    "about_privacy": "StoryCraft no envía datos de uso. La transcripción se hace en este ordenador (o en tu DaVinci Resolve). El texto solo llega a una IA si tú lo copias allí o conectas tu propia app de Claude.",
+    "about_privacy": "StoryCraft no envía nada salvo que actives abajo el aviso de uso: un aviso anónimo por versión a las estadísticas del autor original, sin ubicación ni nada de tus proyectos. La transcripción se hace en este ordenador (o en tu DaVinci Resolve). El texto solo llega a una IA si tú lo copias allí o conectas tu propia app de Claude.",
     "about_data_title": "Tus datos",
     "about_open_data": "Abrir carpeta",
     "about_repo": "StoryCraft en GitHub",
@@ -672,5 +672,10 @@
     "tt_force_xml_assembly": "Fuerza el ensamblado de la línea de tiempo usando la canalización XML FCP7 en lugar del DRT nativo.",
     "status_assembly_drt_build": "Construyendo montaje DRT...",
     "status_assembly_drt_import": "Importando timeline DRT...",
-    "lbl_timeline_ready": "A1: Listo para audio de la línea de tiempo"
+    "lbl_timeline_ready": "A1: Listo para audio de la línea de tiempo",
+    "stats_title": "Ayuda a contar usuarios de StoryCraft",
+    "stats_msg": "StoryCraft se basa en BadWords de Szymon Wolarz, y a él le gustaría saber cuántas personas lo usan.\n\nSi aceptas, StoryCraft envía un aviso anónimo por versión a sus estadísticas (PostHog, servidores en la UE): la versión de StoryCraft, tu sistema operativo, si es una instalación nueva o una actualización, y un identificador aleatorio creado en este ordenador.\n\nNada más: ni ubicación, ni transcripciones, ni nombres de archivos o proyectos, ni contenido multimedia.\n\nPuedes cambiarlo cuando quieras en Ajustes → Acerca de StoryCraft.",
+    "stats_yes": "Sí, cuéntame",
+    "stats_no": "No, gracias",
+    "about_stats_toggle": "Enviar un aviso anónimo por versión al autor original (versión de StoryCraft, sistema operativo, instalación nueva o actualización)"
 }

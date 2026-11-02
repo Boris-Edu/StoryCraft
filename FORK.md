@@ -71,7 +71,7 @@ Status: **Merged upstream** = accepted into the original project. **Upstream PR*
 | **Playhead:** clicking outside the edit while Play edit is on now goes exactly there (Play edit turns off) instead of snapping back into the edit | Fork only |
 | **Rebrand to StoryCraft:** own name, mark (S of timeline clips with a playhead), wordmark in Outfit, cyan→violet brand gradient, favicon and app icons ([BRAND.md](BRAND.md), built by `tools/brand/build_brand.py`); drawn splash screen and start-screen header; user-facing text renamed in all 10 languages (only the credit links keep the original name) | Fork only |
 | **Fully renamed:** Resolve menu entry `StoryCraft.py` (no longer collides with an installed BadWords' `BadWords.py`), `StoryCraft Bridge.lua`, telemetry texts; the GitHub repository is now Boris-Edu/StoryCraft | Fork only |
-| **No telemetry:** the original's one-time anonymous ping went to its author's analytics; the fork sends nothing and never asks (`TELEMETRY_ENABLED = False`) | Fork only |
+| **Usage stats, opt-in only:** the original's prompt and ping are off (`TELEMETRY_ENABLED = False`). StoryCraft asks once at first start whether to send one anonymous ping per version to the original author's PostHog, tagged `app: storycraft`: version, OS, new install or update, a random ID (not the machine-based ID BadWords uses), no location, no person profile. Off unless you agree; changeable in Settings → About StoryCraft (`USAGE_STATS_ENABLED`) | Fork only |
 | **No updates from the original project:** the update check and auto-update are off (`CHECK_ORIGINAL_UPDATES = False`), so a BadWords release can't be installed over the fork | Fork only |
 | README "About" section rewritten to credit and support the original author | Fork only |
 

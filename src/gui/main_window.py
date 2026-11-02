@@ -5603,10 +5603,10 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
     # ------------------------------------------------------------------
 
     def check_telemetry(self):
-        """Show TelemetryPopup if consent has never been recorded."""
-        opt_in = self.engine.os_doc.get_telemetry_pref("telemetry_opt_in")
-        if not getattr(config, "TELEMETRY_ENABLED", True):
-            pass  # this fork sends nothing: no prompt, no ping
+        """Ask once for StoryCraft's usage stats (TelemetryPopup); ping once per version if agreed."""
+        opt_in = self.engine.os_doc.get_telemetry_pref("stats_opt_in")
+        if not getattr(config, "USAGE_STATS_ENABLED", False):
+            pass  # no prompt, no ping
         elif opt_in is None:
             popup = TelemetryPopup(self.engine, parent=self)
             self.engine.os_doc.force_dark_titlebar(int(popup.winId()))

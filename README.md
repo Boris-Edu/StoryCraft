@@ -36,7 +36,7 @@ I looked for a tool that did exactly that and couldn't find one. BadWords came c
 - Each timeline's transcript is saved and reopens without transcribing again. Transcripts and stories are kept in your own StoryCraft folder (on a Mac: `~/Library/Application Support/StoryCraft`).
 
 **Yours alone**
-- No telemetry, no report form, no account: StoryCraft sends nothing anywhere. Updates are checked against this repository's releases only.
+- No account, no report form. StoryCraft sends nothing unless you agree, at first start, to one anonymous ping per version for the original author (StoryCraft version, operating system, new install or update, a random ID; no location, nothing from your projects). Change it anytime in Settings → About StoryCraft. Updates are checked against this repository's releases only.
 - Its own name, look and installer, so it sits next to an installed BadWords without touching it.
 
 Every change, with its status, is listed in [FORK.md](FORK.md).

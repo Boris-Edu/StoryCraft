@@ -125,7 +125,7 @@
     "about_original_repo": "Projeto original",
     "about_support_author": "Apoiar o autor original",
     "about_privacy_title": "Privacidade",
-    "about_privacy": "O StoryCraft não envia dados de utilização. A transcrição corre neste computador (ou no seu DaVinci Resolve). O texto só chega a uma IA se o copiar para lá ou ligar a sua própria app Claude.",
+    "about_privacy": "O StoryCraft não envia nada, a menos que ative abaixo o sinal de utilização: um sinal anónimo por versão para as estatísticas do autor original, sem localização e sem nada dos seus projetos. A transcrição corre neste computador (ou no seu DaVinci Resolve). O texto só chega a uma IA se o copiar para lá ou ligar a sua própria app Claude.",
     "about_data_title": "Os seus dados",
     "about_open_data": "Abrir pasta",
     "about_repo": "StoryCraft no GitHub",
@@ -672,5 +672,10 @@
     "tt_force_xml_assembly": "Força a montagem da linha do tempo usando o pipeline XML FCP7 em vez do DRT nativo.",
     "status_assembly_drt_build": "Construindo montagem DRT...",
     "status_assembly_drt_import": "Importando timeline DRT...",
-    "lbl_timeline_ready": "A1: Pronto para áudio da timeline"
+    "lbl_timeline_ready": "A1: Pronto para áudio da timeline",
+    "stats_title": "Ajude a contar os utilizadores do StoryCraft",
+    "stats_msg": "O StoryCraft baseia-se no BadWords de Szymon Wolarz, que gostaria de saber quantas pessoas o usam.\n\nSe aceitar, o StoryCraft envia um sinal anónimo por versão para as estatísticas dele (PostHog, servidores na UE): a versão do StoryCraft, o seu sistema operativo, se é uma instalação nova ou uma atualização, e um identificador aleatório criado neste computador.\n\nMais nada: sem localização, sem transcrições, sem nomes de ficheiros ou projetos, sem multimédia.\n\nPode mudar isto quando quiser em Configurações → Sobre o StoryCraft.",
+    "stats_yes": "Sim, contem comigo",
+    "stats_no": "Não, obrigado",
+    "about_stats_toggle": "Enviar um sinal anónimo por versão ao autor original (versão do StoryCraft, sistema operativo, instalação nova ou atualização)"
 }

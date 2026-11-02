@@ -18,25 +18,19 @@ from PySide6.QtWidgets import (
 import config
 from gui.components.mixins import FramelessWindowMixin, _BaseDialog, _HAS_QFRAMELESS
 from gui.components.titlebar import CustomTitleBar
-from gui.widgets.buttons import TrackSquareCheckbox
 from gui.widgets.language_selector import _LangPickerDialog
 from gui.utils import _app_icon, _txt, _center_on_screen
 
 
 class TelemetryPopup(FramelessWindowMixin, _BaseDialog):
     """
-    Modal dialog asking the user for analytics consent.
+    Modal dialog asking once for StoryCraft's usage stats.
 
-    Skip condition: if engine.os_doc.get_telemetry_pref("telemetry_opt_in")
+    Skip condition: if engine.os_doc.get_telemetry_pref("stats_opt_in")
     is not None, caller should not show this dialog.
 
-    On "I Agree":
-        - Saves telemetry_opt_in = True
-        - Saves telemetry_allow_geo = <checkbox state>
-        - Calls engine.send_telemetry_ping("app_started")
-
-    On "No thanks" (or Escape / close):
-        - Saves telemetry_opt_in = False
+    On "Yes": saves stats_opt_in = True and sends the ping (engine.send_telemetry_ping).
+    On "No thanks" (or Escape / close): saves stats_opt_in = False.
     """
 
     def __init__(self, engine, parent=None):
@@ -57,64 +51,58 @@ class TelemetryPopup(FramelessWindowMixin, _BaseDialog):
         self.setWindowIcon(_app_icon())
 
         # --- Root QSS (window is transparent; styling lives on inner_frame) ---
+        # StoryCraft look, same values as Settings: gui/theme.py maps these greys onto the active
+        # theme (light ones included); only the brand gradient and its ink text pass through.
+        grad = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #22d3ee, stop:1 #a855f7)"
+        grad_hover = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3ad9f0, stop:1 #b36cf8)"
+        btn = f"""
+                font-family: "{config.UI_FONT_NAME}";
+                font-size: {config.FS(10)}pt;
+                font-weight: 600;
+                border: none;
+                min-width: {config.S(120)}px;
+                padding: {config.S(8)}px {config.S(18)}px;
+                border-radius: {config.S(10)}px;"""
         self.setStyleSheet(f"""
             QDialog, TelemetryPopup {{ background-color: transparent; }}
             QFrame#MainInnerFrame {{
-                background-color: {config.BG_COLOR};
-                border: 1px solid #000000;
-                border-radius: {config.S(8)}px;
+                background-color: #1c1c1c;
+                border: 1px solid #2c2c2c;
+                border-radius: {config.S(14)}px;
             }}
             QLabel#lbl_title {{
-                color: #ffffff;
-                font-size: {config.FS(14)}pt;
-                font-weight: bold;
-                font-family: "{config.UI_FONT_NAME}";
+                color: #ededed;
+                font-size: {config.FS(15)}pt;
+                font-weight: 600;
+                font-family: "Outfit";
                 background: transparent;
             }}
             QLabel#lbl_msg {{
-                color: {config.FG_COLOR};
+                color: #b0b0b0;
                 font-size: {config.FS(10.5)}pt;
                 font-family: "{config.UI_FONT_NAME}";
                 background: transparent;
             }}
             QPushButton#btn_lang {{
-                color: {config.GEAR_COLOR};
+                color: #8a8a8a;
                 font-family: "{config.UI_FONT_NAME}";
-                font-size: {config.FS(10.5)}pt;
-                font-weight: bold;
+                font-size: {config.FS(10)}pt;
+                font-weight: 600;
                 background: transparent;
                 border: none;
                 padding: {config.S(2)}px {config.S(4)}px;
             }}
-            QPushButton#btn_lang:hover {{
-                color: #ffffff;
+            QPushButton#btn_lang:hover {{ color: #ededed; }}
+            QPushButton#btn_yes {{{btn}
+                background: {grad};
+                color: #0b0b14;
             }}
-            QPushButton#btn_yes {{
-                background-color: {config.BTN_BG};
-                color: #ffffff;
-                font-family: "{config.UI_FONT_NAME}";
-                font-size: {config.FS(10)}pt;
-                font-weight: bold;
-                border: none;
-                padding: {config.S(6)}px {config.S(16)}px;
-                border-radius: {config.S(3)}px;
+            QPushButton#btn_yes:hover {{ background: {grad_hover}; }}
+            QPushButton#btn_no {{{btn}
+                background-color: #2c2c2c;
+                color: #ededed;
             }}
-            QPushButton#btn_yes:hover {{
-                background-color: {config.BTN_ACTIVE};
-            }}
-            QPushButton#btn_no {{
-                background-color: {config.CANCEL_BG};
-                color: #ffffff;
-                font-family: "{config.UI_FONT_NAME}";
-                font-size: {config.FS(10)}pt;
-                font-weight: bold;
-                border: none;
-                padding: {config.S(6)}px {config.S(16)}px;
-                border-radius: {config.S(3)}px;
-            }}
-            QPushButton#btn_no:hover {{
-                background-color: {config.CANCEL_ACTIVE};
-            }}
+            QPushButton#btn_no:hover {{ background-color: #353535; }}
         """)
 
         # --- Outer wrapper ---
@@ -137,7 +125,7 @@ class TelemetryPopup(FramelessWindowMixin, _BaseDialog):
         self._tb.btn_min.hide()
         self._tb.btn_max.hide()
         if hasattr(self._tb, '_lbl_title'):
-            self._tb._lbl_title.setText(self._t("title_telemetry"))
+            self._tb._lbl_title.setText(self._t("stats_title"))
         root_layout.addWidget(self._tb)
 
         # --- Content area ---
@@ -174,16 +162,7 @@ class TelemetryPopup(FramelessWindowMixin, _BaseDialog):
         content_layout.addWidget(self._lbl_msg)
         content_layout.addSpacing(config.S(10))
 
-        # Geo Checkbox
-        geo_layout = QHBoxLayout()
-        geo_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self._chk_geo = TrackSquareCheckbox("", is_checked=True, font_size=config.FS(10.5), parent=container)
-        
-        geo_layout.addWidget(self._chk_geo)
-        geo_layout.addStretch()
-        content_layout.addLayout(geo_layout)
-        content_layout.addSpacing(config.S(20))
+        content_layout.addSpacing(config.S(10))
 
         # Buttons row (No | Yes)
         btn_row = QHBoxLayout()
@@ -214,15 +193,14 @@ class TelemetryPopup(FramelessWindowMixin, _BaseDialog):
 
     def _refresh_texts(self):
         """Update all translatable labels and re-size the dialog."""
-        self.setWindowTitle(self._t("title_telemetry"))
-        self._lbl_title.setText(self._t("title_telemetry"))
-        self._lbl_msg.setText(self._t("msg_telemetry"))
-        self._btn_yes.setText(self._t("btn_telemetry_yes"))
-        self._btn_no.setText(self._t("btn_telemetry_no"))
+        self.setWindowTitle(self._t("stats_title"))
+        self._lbl_title.setText(self._t("stats_title"))
+        self._lbl_msg.setText(self._t("stats_msg"))
+        self._btn_yes.setText(self._t("stats_yes"))
+        self._btn_no.setText(self._t("stats_no"))
         self._btn_lang.setText(self._lang.upper())
-        self._chk_geo.setText(self._t("chk_telemetry_geo"))
         if hasattr(self, '_tb') and hasattr(self._tb, '_lbl_title'):
-            self._tb._lbl_title.setText(self._t("title_telemetry"))
+            self._tb._lbl_title.setText(self._t("stats_title"))
 
         DIALOG_W      = config.S(580)
         HORIZ_MARGINS = config.S(15 + 15 + 20 + 20)
@@ -261,14 +239,12 @@ class TelemetryPopup(FramelessWindowMixin, _BaseDialog):
         self._refresh_texts()
 
     def _on_yes(self):
-        self._engine.os_doc.set_telemetry_pref("telemetry_opt_in",   True)
-        self._engine.os_doc.set_telemetry_pref("telemetry_allow_geo", self._chk_geo.isChecked())
+        self._engine.os_doc.set_telemetry_pref("stats_opt_in", True)
         self._engine.send_telemetry_ping("app_started")
         self.accept()
 
     def _on_no(self):
-        self._engine.os_doc.set_telemetry_pref("telemetry_opt_in", False)
-        self._engine.os_doc.set_telemetry_pref("telemetry_allow_geo", False)
+        self._engine.os_doc.set_telemetry_pref("stats_opt_in", False)
         self.accept()
 
     def keyPressEvent(self, event):

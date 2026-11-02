@@ -24,6 +24,10 @@ DEFAULT_USER_DATA = {
     "telemetry_opt_in": None,   # None = not yet asked, True/False = user decision
     "telemetry_geo": True,      # Whether to include country/city in telemetry ping
     "last_pinged_version": "",  # Version string of the last successful telemetry ping
+    # StoryCraft usage stats (separate from the original's keys above, which stay unused)
+    "stats_opt_in": None,       # None = not yet asked, True/False = user decision
+    "stats_id": None,           # Random ID made on opt-in (not derived from the machine)
+    "stats_last_version": "",   # Version of the last successful StoryCraft ping
 }
 
 # ==========================================

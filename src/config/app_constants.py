@@ -25,8 +25,12 @@ CHECK_ORIGINAL_UPDATES = False
 UPDATE_REPO = "Boris-Edu/StoryCraft"
 UPDATE_BRANCH = "fork"
 UPDATE_INSTALL_SUPPORTED = True
-# Telemetry of the original project goes to its author's analytics: off in the fork (no prompt, no ping)
+# The original project's telemetry prompt and Settings page: off in the fork
 TELEMETRY_ENABLED = False
+# StoryCraft's own usage stats, opt-in: asked once, then one anonymous ping per version to the original
+# author's PostHog (POSTHOG_* below), tagged app=storycraft. No location, random ID. See send_telemetry_ping.
+USAGE_STATS_ENABLED = True
+USAGE_STATS_APP = "storycraft"
 # The original's "Send report" goes to its author's server: off in the fork (Settings shows Logs instead)
 SUPPORT_REPORTS_ENABLED = False
 VERSION = "4.0.0"

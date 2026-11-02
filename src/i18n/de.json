@@ -125,7 +125,7 @@
     "about_original_repo": "Originalprojekt",
     "about_support_author": "Den Originalautor unterstützen",
     "about_privacy_title": "Datenschutz",
-    "about_privacy": "StoryCraft sendet keine Nutzungsdaten. Die Transkription läuft auf diesem Computer (oder in deinem DaVinci Resolve). Text erreicht eine KI nur, wenn du ihn selbst dorthin kopierst oder deine eigene Claude-App verbindest.",
+    "about_privacy": "StoryCraft sendet nichts, außer du schaltest unten den Nutzungs-Ping ein: ein anonymer Ping pro Version an die Statistik des ursprünglichen Autors, ohne Standort und ohne Inhalte deiner Projekte. Die Transkription läuft auf diesem Computer (oder in deinem DaVinci Resolve). Text erreicht eine KI nur, wenn du ihn selbst dorthin kopierst oder deine eigene Claude-App verbindest.",
     "about_data_title": "Deine Daten",
     "about_open_data": "Ordner öffnen",
     "about_repo": "StoryCraft auf GitHub",
@@ -672,5 +672,10 @@
     "tt_force_xml_assembly": "Erzwingt das Zusammenstellen der Timeline über die FCP7-XML-Pipeline anstelle von nativem DRT.",
     "status_assembly_drt_build": "DRT-Zusammenstellung wird erstellt...",
     "status_assembly_drt_import": "DRT-Timeline wird importiert...",
-    "lbl_timeline_ready": "A1: Bereit für Timeline-Audio"
+    "lbl_timeline_ready": "A1: Bereit für Timeline-Audio",
+    "stats_title": "Hilf, StoryCraft-Nutzer zu zählen",
+    "stats_msg": "StoryCraft basiert auf BadWords von Szymon Wolarz, und er würde gern wissen, wie viele Leute es nutzen.\n\nWenn du zustimmst, sendet StoryCraft pro Version einen anonymen Ping an seine Statistik (PostHog, Server in der EU): die StoryCraft-Version, dein Betriebssystem, ob es eine Neuinstallation oder ein Update ist, und eine zufällige ID, die auf diesem Computer erzeugt wird.\n\nSonst nichts: kein Standort, keine Transkripte, keine Datei- oder Projektnamen, keine Medien.\n\nDu kannst das jederzeit unter Einstellungen → Über StoryCraft ändern.",
+    "stats_yes": "Ja, zähl mich mit",
+    "stats_no": "Nein danke",
+    "about_stats_toggle": "Pro Version einen anonymen Ping an den ursprünglichen Autor senden (StoryCraft-Version, Betriebssystem, Neuinstallation oder Update)"
 }
