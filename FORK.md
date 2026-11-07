@@ -76,12 +76,28 @@ Status: **Merged upstream** = accepted into the original project. **Upstream PR*
 | **No updates from the original project:** the update check and auto-update are off (`CHECK_ORIGINAL_UPDATES = False`), so a BadWords release can't be installed over the fork | Fork only |
 | README "About" section rewritten to credit and support the original author | Fork only |
 
+### v4.1: speakers, finishing and the edits library (fork only)
+| Change | Status |
+|---|---|
+| **Up to 10 speakers:** found automatically after transcription (CAM++ voice windows, clustering, Viterbi smoothing; a blended voice between two speakers is dropped); the count is chosen on the start screen (Auto, 1–10). Name tags start every turn; click one to change the turn, reassign everything a voice said, rename, set the role (main / interviewer / other) or **Leave out** (cut from the edit). Selecting words → Speaker ▸ moves just those; a sentence two speakers share is split in two. Speakers card in the inspector; undoable | Fork only |
+| **Copy for AI names the speakers** (SPEAKERS header, NAME: on each moment) and warns when none are set; Copy for AI and Import AI edit grouped as **External AI** (story board, title-bar and Mac menus) | Fork only |
+| **After sending to Resolve:** Voice Isolation on the dialogue (amount), captions as an SRT file and/or Resolve subtitles (names at speaker changes), cameras Off / By speaker (one video track per speaker) / SmartSwitch (Resolve Studio multicam, audio-only fallback), exports to Premiere (FCP7 XML), Final Cut (FCPXML bundle), OTIO, EDL and AAF in an export folder | Fork only |
+| **Swear words:** marked after transcription (10 languages), then Keep / Cut / Bleep; a bleep mutes the word and adds a tone on a "StoryCraft bleeps" track, the picture stays | Fork only |
+| **From script:** paste a script or outline; the story board takes the matching sentences in that order (the later take wins) | Fork only |
+| **Edits library:** before an edit is sent, the source timeline is backed up (.drt, only when it changed); every edit's state (transcript, marks, speakers, story board) is kept under `saves/edits/<project>/<source>/`, listed by date or length on the story board, and reloads in one click. Starting StoryCraft on an edit timeline opens that edit (older edits open their source's transcript) instead of offering to transcribe | Fork only |
+| **Edited view** (Original / Edited): the transcript shows only the kept words in story order, follows every block moved, and playback highlights only kept words | Fork only |
+| **Send state:** Send to Resolve shows New / Synced / Changed; **Keep Resolve in sync** (opt-in) rebuilds the sent timeline under the same name 4 s after a change, and pauses when the timeline was edited by hand in Resolve or deleted | Fork only |
+| **Playback speed** 0.5×–3× with pitch kept (speed pill next to Play, keys < and >), remembered | Fork only |
+| **Faster opening:** an hour-long project no longer freezes the window for ~8 s (word layout and silence snapping were quadratic; the edit audio decodes on a thread); the loading screen lets the mark finish tracing; the launch splash keeps animating while the window is built (cached static layer, repaint without the event loop) | Fork only |
+| Fixes: Clean up / side buttons no longer leave a panel open in a separate window; the temp folder is cleaned again (missing import); Resolve's Scripts menu gets a single StoryCraft entry (setup and updater write one wrapper; the Bridge only on Resolve Free) | Fork only |
+
 ### Tools
 | Change | Status |
 |---|---|
 | Speech-to-text benchmark for Mac (faster-whisper vs mlx-whisper vs Apple Speech), on branch [`feat/mac-asr-benchmark`](https://github.com/Boris-Edu/StoryCraft/tree/feat/mac-asr-benchmark/tools/asr_benchmark) | Fork only |
 
 ## Changelog
+- **2026-11-07:** v4.1.0: up to 10 speakers, finishing in Resolve (Voice Isolation, captions, cameras by speaker, exports to Premiere / Final Cut / OTIO / EDL / AAF), swear words, from script, edits library, edited view, Keep Resolve in sync, playback speed, faster opening; website timeline page.
 - **2026-11-02:** v4.0.1: StoryCraft Setup (graphical installer, downloads on the release page), opt-in usage stats for the original author, Linux installer fixes (no python3-venv, missing update-desktop-database, failed installs now exit 1).
 - **2026-11-02:** first public release, v4.0.0 (the website is not part of the download). PRs #9–#15 merged into BadWords; #16 open.
 - **2026-10-31 (local):** UI revamp started: Keep / Mark / Cut for pauses, Play edit (jumping, then smooth rendered preview), Story board, workflow bar with Send to Resolve, Keep / Mark / Cut for colours, colour themes, refreshed layout and theme fonts; renamed StoryCraft with its own identity.

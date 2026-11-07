@@ -33,7 +33,7 @@ USAGE_STATS_ENABLED = True
 USAGE_STATS_APP = "storycraft"
 # The original's "Send report" goes to its author's server: off in the fork (Settings shows Logs instead)
 SUPPORT_REPORTS_ENABLED = False
-VERSION = "4.0.1"
+VERSION = "4.1.0"
 # Media Pool bin and timeline names in Resolve. Timelines made by the original app
 # ("... BadWords Edit N") still count when numbering new edits.
 RESOLVE_BIN = "StoryCraft"
