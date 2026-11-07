@@ -46,6 +46,10 @@ class TranscriptionCanvas(QWidget):
         self._cut_preview = {}
         # Shift-drag passage: (first index, last index) into words_data, or None
         self._selection = None
+        # Edited view: only the words the edit keeps, in play order (set by the main window)
+        self.edit_view = False
+        self._edit_order = None
+        self._edit_blocks = set()
         self._sel_anchor = None
         self._is_erasing = False
         self._is_selecting = False
@@ -239,6 +243,8 @@ class TranscriptionCanvas(QWidget):
             w.pop('_ts_rect', None)
             w.pop('_ts_text', None)
             w.pop('_separator_y', None)
+            w.pop('_spk_tag', None)  # streaming: no speakers yet
+            w.pop('_spk_rect', None)
 
             # Segment boundary / paragraph start
             if is_doc and w.get('is_segment_start'):
@@ -315,6 +321,11 @@ class TranscriptionCanvas(QWidget):
         self._target_streamed_words = []
         import algorithms
         algorithms.snapshot_ai_marks(self.words_data)  # keep what the AI marked, for Restore
+        if self.words_data and hasattr(self.main_window, '_migrate_speakers'):
+            try:
+                self.main_window._migrate_speakers(self.words_data)  # old Interviewer marker -> speaker 2
+            except Exception:
+                pass
         self._selection = None
 
         if hasattr(self, 'words_data'):
@@ -343,6 +354,11 @@ class TranscriptionCanvas(QWidget):
         self.words_data = words_data
         import algorithms
         algorithms.snapshot_ai_marks(self.words_data)  # keep what the AI marked, for Restore
+        if self.words_data and hasattr(self.main_window, '_migrate_speakers'):
+            try:
+                self.main_window._migrate_speakers(self.words_data)  # old Interviewer marker -> speaker 2
+            except Exception:
+                pass
         self._selection = None
         if hasattr(self, 'words_data'):
             for w in self.words_data:
@@ -354,6 +370,47 @@ class TranscriptionCanvas(QWidget):
             vbar.setValue(old_scroll_val)
 
         self.update()
+
+    def set_edit_order(self, order, block_starts=()):
+        """The edit as the next Send plays it: word indices in play order, and the first word of
+        each story block. Re-laid out at once when the Edited view is on."""
+        order = list(order) if order is not None else None
+        blocks = set(block_starts or ())
+        if order == self._edit_order and blocks == self._edit_blocks:
+            return
+        self._edit_order, self._edit_blocks = order, blocks
+        self._edit_set = set(order) if order is not None else None
+        if self.edit_view:
+            self._selection = None
+            self.refresh_layout()
+
+    def set_edit_view(self, on):
+        on = bool(on)
+        if on == self.edit_view:
+            return
+        self.edit_view = on
+        self._selection = None
+        self.refresh_layout()
+
+    def edit_ids(self):
+        """Word indices shown in the Edited view (None when the original is shown)."""
+        if not self.edit_view or self._edit_order is None:
+            return None
+        return getattr(self, '_edit_set', None)
+
+    def _selected_ids(self):
+        """The selected words: between the two ends in display order (the Edited view can reorder)."""
+        sel = self._selection
+        if not sel:
+            return []
+        a, b = sel
+        if self.edit_view and self._edit_order is not None:
+            pos = {i: k for k, i in enumerate(self._edit_order)}
+            if a in pos and b in pos:
+                lo, hi = sorted((pos[a], pos[b]))
+                return self._edit_order[lo:hi + 1]
+        lo, hi = min(a, b), max(a, b)
+        return list(range(lo, hi + 1))
 
     def set_cut_preview(self, preview):
         """preview: {word id: 'cut' | 'jump'} from the current cut settings."""
@@ -368,7 +425,19 @@ class TranscriptionCanvas(QWidget):
         Result is cached in self._cached_visible_words — do NOT call this inside paintEvent.
         """
         if not self.words_data: return []
-        
+        for w in self.words_data:
+            w.pop('_edit_block_start', None)
+        if self.edit_view and self._edit_order is not None:
+            vis = []
+            n = len(self.words_data)
+            for i in self._edit_order:
+                if 0 <= i < n and self.words_data[i].get('type') != 'silence':
+                    w = self.words_data[i]
+                    if i in self._edit_blocks and vis:
+                        w['_edit_block_start'] = True
+                    vis.append(w)
+            return vis
+
         vis = []
         previous_was_inaudible = False
         force_segment_start = False
@@ -479,6 +548,71 @@ class TranscriptionCanvas(QWidget):
         left = max(20, (width - col_w) // 2)
         return left, left + col_w, False, 0, 0
 
+    # ── Speaker turns: a name tag above the first word of each turn ─────────────────────────────
+    def _mark_speaker_turns(self, visible_words):
+        """The first visible word of each speaker turn gets w['_spk_tag'] = (id, name, colour, left_out)."""
+        import speakers_model as SM
+        for w in visible_words:
+            w.pop('_spk_tag', None)
+            w.pop('_spk_rect', None)
+        if not self.words_data or not SM.has_speakers(self.words_data):
+            return
+        info = SM.by_id(self.words_data)
+        prev = None
+        for w in visible_words:
+            s = w.get('spk')
+            if not s or not SM.is_spoken(w):
+                continue
+            if s != prev:
+                sp = info.get(s) or {}
+                w['_spk_tag'] = (s, sp.get('name') or f"#{s}", sp.get('color') or "#888888", bool(sp.get('leave_out')))
+                prev = s
+
+    def _place_speaker_tag(self, w, x, y, ts_metrics, rtl_right=None):
+        """Sets the tag's rect at (x, y) (right-aligned to rtl_right in RTL); returns the height used."""
+        from PySide6.QtCore import QRect
+        name = w['_spk_tag'][1].upper()
+        tw = int(ts_metrics.horizontalAdvance(name) * 1.15) + config.S(16)
+        th = ts_metrics.height() + config.S(6)
+        if rtl_right is not None:
+            x = rtl_right - tw
+        w['_spk_rect'] = QRect(x, y, tw, th)
+        return th + config.S(6)
+
+    def _paint_speaker_tag(self, p, w, base_font):
+        from PySide6.QtGui import QColor, QFont, QPen
+        from PySide6.QtCore import QRectF
+        _sid, name, color, left_out = w['_spk_tag']
+        r = w['_spk_rect']
+        c = QColor(color)
+        bg = QColor(c)
+        bg.setAlpha(34)
+        p.save()
+        p.setPen(QPen(c, 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), r.height() / 2, r.height() / 2)
+        f = QFont(base_font)
+        f.setBold(True)
+        f.setStrikeOut(left_out)
+        p.setFont(f)
+        if left_out:
+            p.setOpacity(0.6)
+        p.setPen(c)
+        p.drawText(r, Qt.AlignCenter, name.upper())
+        p.restore()
+
+    def speaker_tag_at(self, pos):
+        """Index of the first word of the turn whose name tag is under pos, else None."""
+        for w in getattr(self, '_cached_visible_words', None) or []:
+            r = w.get('_spk_rect')
+            if r is not None and r.contains(pos):
+                return w.get('id')
+        return None
+
+    def refresh_layout(self):
+        self._calculate_layout()
+        self.update()
+
     def _calculate_layout(self):
         self._doc_style = False
         self._ts_in_gutter = False
@@ -528,7 +662,7 @@ class TranscriptionCanvas(QWidget):
         if is_sbs and hasattr(self, 'sbs_rows'):
             # 0. CLEANUP (usuwamy śmieci z normalnego widoku, które powodowały problemy z separatorami)
             for w in self.words_data:
-                for key in ['_rect', '_ts_rect', '_display_text', '_ts_text', '_separator_y']:
+                for key in ['_rect', '_ts_rect', '_display_text', '_ts_text', '_separator_y', '_spk_tag', '_spk_rect']:
                     w.pop(key, None)
                     
             visible_words = []
@@ -718,6 +852,7 @@ class TranscriptionCanvas(QWidget):
         # Rebuild the cached list once — paintEvent reads it directly, never recomputes
         visible_words = self._get_visible_words()
         self._cached_visible_words = visible_words
+        self._mark_speaker_turns(visible_words)
 
         if view_mode == 'segmented' and not is_rtl:
             self._layout_document(visible_words, prefs, metrics, ts_metrics, space_w, line_height)
@@ -728,13 +863,29 @@ class TranscriptionCanvas(QWidget):
             w.pop('_ts_rect', None)
             w.pop('_ts_text', None)
             w.pop('_separator_y', None)
-            
+
+            # A new story block (Edited view): a new paragraph
+            if w.get('_edit_block_start') and not w.get('_spk_tag'):
+                if (x < max_w) if is_rtl else (x > 20):
+                    y += line_height
+                y += config.S(14)
+                x = max_w if is_rtl else 20
+
+            # A new speaker turn: new paragraph with the speaker's name tag above it
+            if w.get('_spk_tag'):
+                if (x < max_w) if is_rtl else (x > 20):
+                    y += line_height
+                if y > 20:
+                    y += config.S(14)
+                x = max_w if is_rtl else 20
+                y += self._place_speaker_tag(w, 20, y, ts_metrics, rtl_right=max_w if is_rtl else None)
+
             # Paragraph formatting based on Engine's Chunking
-            if view_mode == 'segmented' and w.get('is_segment_start'):
+            if view_mode == 'segmented' and w.get('is_segment_start') and not self.edit_view:
                 has_advanced = (x < max_w) if is_rtl else (x > 20)
                 if has_advanced: 
                     y += line_height
-                if y > 20: 
+                if y > 20 and not w.get('_spk_tag'):
                     w['_separator_y'] = y + 10 # Store Y coordinate for the line
                     y += 20 # Gap between paragraphs
                 x = max_w if is_rtl else 20
@@ -821,10 +972,24 @@ class TranscriptionCanvas(QWidget):
             w.pop('_ts_text', None)
             w.pop('_separator_y', None)
 
-            if w.get('is_segment_start'):
+            if w.get('_edit_block_start') and not w.get('_spk_tag'):  # a new story block
+                if x > left:
+                    y += lh
+                y += para_gap
+                x = left
+
+            if w.get('_spk_tag'):  # a new speaker turn: its name tag above the paragraph
                 if x > left:
                     y += lh
                 if y > 20:
+                    y += para_gap
+                x = left
+                y += self._place_speaker_tag(w, left, y, ts_metrics)
+
+            if w.get('is_segment_start') and not self.edit_view:
+                if x > left:
+                    y += lh
+                if y > 20 and not w.get('_spk_tag'):
                     y += para_gap
                 x = left
                 ts_text = self._format_doc_ts(w.get('start', 0), precise)
@@ -949,7 +1114,8 @@ class TranscriptionCanvas(QWidget):
         p.setPen(Qt.NoPen)
 
         visible_words = [w for w in all_visible if '_rect' not in w or target_clip.intersects(w['_rect'])
-                         or ('_ts_rect' in w and target_clip.intersects(w['_ts_rect']))]
+                         or ('_ts_rect' in w and target_clip.intersects(w['_ts_rect']))
+                         or ('_spk_rect' in w and target_clip.intersects(w['_spk_rect']))]
         if not visible_words:
             return
         
@@ -1056,6 +1222,7 @@ class TranscriptionCanvas(QWidget):
 
         # Selected passage (Shift-drag): a soft accent band behind its words
         sel = self._selection
+        sel_ids = set(self._selected_ids()) if sel else set()
         if sel:
             band = QColor(qc(config.BTN_BG))
             band.setAlpha(55)
@@ -1064,7 +1231,7 @@ class TranscriptionCanvas(QWidget):
             lines = {}  # one continuous band per line
             for w in visible_words:
                 wid = w.get('id')
-                if '_rect' in w and wid is not None and sel[0] <= wid <= sel[1] and not w.get('is_script_word'):
+                if '_rect' in w and wid is not None and wid in sel_ids and not w.get('is_script_word'):
                     r = w['_rect']
                     key = round(r.top())
                     lines[key] = lines[key].united(r) if key in lines else QRectF(r)
@@ -1193,6 +1360,10 @@ class TranscriptionCanvas(QWidget):
             if alpha < 1.0:
                 p.setOpacity(alpha)
             
+            if '_spk_rect' in w and '_spk_tag' in w:
+                self._paint_speaker_tag(p, w, ts_font)
+                p.setFont(active_font)
+
             if '_ts_rect' in w:
                 p.setFont(ts_font)
                 p.setPen(ts_color)
@@ -1398,6 +1569,11 @@ class TranscriptionCanvas(QWidget):
 
     def mousePressEvent(self, event):
         from PySide6.QtGui import QGuiApplication
+        if event.button() == Qt.LeftButton:
+            first = self.speaker_tag_at(event.position().toPoint())
+            if first is not None and hasattr(self.main_window, '_speaker_turn_menu'):
+                self.main_window._speaker_turn_menu(first, event.globalPosition().toPoint())
+                return
         prefs = getattr(self.main_window.engine, 'load_preferences', lambda: {})() or {}
         shortcuts = prefs.get('shortcuts', getattr(config, 'DEFAULT_SETTINGS', {}).get('shortcuts', {}))
         jump_opt = shortcuts.get('jump_to_word', 'opt_ctrl_rmb')
@@ -1500,7 +1676,7 @@ class TranscriptionCanvas(QWidget):
             return
         if event.button() == Qt.RightButton and no_mods:
             sel = self._selection
-            if sel and idx is not None and sel[0] <= idx <= sel[1]:
+            if sel and idx is not None and idx in set(self._selected_ids()):
                 self._show_selection_menu(event.globalPosition().toPoint())
                 return
             # Right-click (drag): clear marks
@@ -1525,7 +1701,7 @@ class TranscriptionCanvas(QWidget):
         if getattr(self, '_is_selecting', False) and event.buttons() & Qt.LeftButton:
             idx = self._word_index_at(event.pos())
             if idx is not None and self._sel_anchor is not None:
-                self._selection = (min(self._sel_anchor, idx), max(self._sel_anchor, idx))
+                self._selection = (self._sel_anchor, idx)  # both ends; _selected_ids() orders them
                 self.update()
             return
         if event.buttons() & (Qt.LeftButton | Qt.RightButton) and getattr(self, '_is_painting', False):
@@ -1566,7 +1742,7 @@ class TranscriptionCanvas(QWidget):
         sel = self._selection
         if not sel:
             return
-        ids = list(range(sel[0], sel[1] + 1))
+        ids = self._selected_ids()
         mw = self.main_window
         t = mw.txt
         menu = context_menu(self)
@@ -1579,6 +1755,11 @@ class TranscriptionCanvas(QWidget):
             if sid and sid != "eraser" and rb.isEnabled():
                 mark_menu.addAction(rb.text(), lambda s=sid: mw._selection_mark(ids, s))
         menu.addAction(t("menu_sel_clear"), lambda: mw._selection_clear(ids))
+        if hasattr(mw, '_fill_speaker_menu'):
+            spk_menu = context_menu(menu)
+            spk_menu.setTitle(t("menu_sel_speaker"))
+            menu.addMenu(spk_menu)
+            mw._fill_speaker_menu(spk_menu, ids)
         menu.addSeparator()
         menu.addAction(t("menu_sel_restore"), lambda: mw._selection_restore_ai(ids))
         menu.addAction(t("menu_sel_detect"), lambda: mw._selection_detect_again(ids))

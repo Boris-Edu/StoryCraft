@@ -74,6 +74,10 @@ from handlers.analysis_worker import AnalysisWorker
 from handlers.autosave_manager import AutoSaveManager
 from handlers.undo_manager import UndoManager
 
+import threading as _threading
+_EDIT_AUDIO_LOCK = _threading.Lock()  # one decode of the edit audio at a time (see _edit_audio)
+
+
 class _ProjectImportWorker(QThread):
     status_updated = Signal(str)
     finished_success = Signal(dict, dict)
@@ -386,7 +390,9 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             self._mac_action_copy = self._mac_menu_transcript.addAction(self.txt("titlebar_copy_clipboard"))
             self._mac_action_copy.triggered.connect(self._on_copy_transcript_clipboard)
             self._mac_menu_transcript.addSeparator()
-            self._mac_action_copy_ai = self._mac_menu_transcript.addAction(self.txt("titlebar_copy_ai_transcript"))
+            self._mac_action_ai_head = self._mac_menu_transcript.addAction(self.txt("group_external_ai"))
+            self._mac_action_ai_head.setEnabled(False)  # section header
+            self._mac_action_copy_ai =self._mac_menu_transcript.addAction(self.txt("titlebar_copy_ai_transcript"))
             self._mac_action_copy_ai.triggered.connect(self._on_copy_ai_transcript)
             self._mac_action_export_ai = self._mac_menu_transcript.addAction(self.txt("titlebar_export_ai_transcript"))
             self._mac_action_export_ai.triggered.connect(self._on_export_ai_transcript)
@@ -955,10 +961,19 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         self._sync_inspector_tabs(activity_id)
         activity_widget = self.activities[activity_id]
         layout = self._inspector_host.layout()
+        # Panels taken out go to a hidden holder inside the window. Parentless (setParent(None)) they
+        # were windows of their own, and any later show() opened them in a separate window.
+        parking = getattr(self, '_inspector_parking', None)
+        if parking is None:
+            from PySide6.QtWidgets import QWidget as _QW
+            parking = self._inspector_parking = _QW(self)
+            parking.hide()
         while layout.count():
             item = layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+            w = item.widget()
+            if w:
+                w.hide()
+                w.setParent(parking)
         layout.addWidget(activity_widget)
         activity_widget.show()
 
@@ -1124,6 +1139,10 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                         return True
                     elif fwd_key and seq_str == fwd_key:
                         self.audio_preview.skip_forward()
+                        return True
+                    elif event.text() in (">", "<") and hasattr(self.audio_preview, 'step_speed'):
+                        # Faster / slower, as in most players (Shift+. and Shift+,)
+                        self.audio_preview.step_speed(1 if event.text() == ">" else -1)
                         return True
                 except Exception:
                     pass
@@ -1599,13 +1618,16 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if canvas is None or not canvas.words_data:
             return []
         fillers = {f.lower() for f in (self.engine.load_preferences() or {}).get('filler_words', config.DEFAULT_BAD_WORDS)}
+        swear = self._swear_status()
         out = []
         for i, w in enumerate(canvas.words_data):
             a = w.get('ai_mark')
             if not a:
                 continue
             is_filler = (w.get('text', '').strip(".,?!:;\"'()[]{}").lower() in fillers)
-            if a.startswith('custom_'):
+            if swear and a == swear:
+                k = 'swears'
+            elif a.startswith('custom_'):
                 k = 'speaker'
             elif w.get('is_stammer'):
                 k = 'stammers'
@@ -1624,12 +1646,35 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             return
         if tl_name is None and hasattr(self, 'combo_tl_0'):
             tl_name = self.combo_tl_0.text()
-        found = timeline_store.find(self.engine.os_doc.get_saves_folder(), self.engine._get_resolve_project_name(), tl_name)
+        saves, proj = self.engine.os_doc.get_saves_folder(), self.engine._get_resolve_project_name()
+        found = timeline_store.find(saves, proj, tl_name)
+        self._saved_edit_entry = None
+        from_source = None
+        if not found:
+            # A timeline StoryCraft made: open that edit (its marks, speakers and story board)
+            from handlers import edit_library
+            entry = edit_library.find_edit(saves, proj, tl_name)
+            if entry:
+                self._saved_edit_entry = entry
+                found = (entry["state_path"], entry.get("created") or os.path.getmtime(entry["state_path"]))
+            else:
+                # An older edit (before the edits list): its source timeline's transcript
+                src = self._source_of_edit_name(tl_name)
+                found = timeline_store.find(saves, proj, src) if src else None
+                from_source = src if found else None
         self._saved_transcript_path = found[0] if found else None
-        self._saved_transcript_current = bool(found) and self._saved_matches_timeline(found[0], tl_name)
+        self._saved_transcript_current = bool(found) and (
+            bool(self._saved_edit_entry or from_source) or self._saved_matches_timeline(found[0], tl_name))
         if found:
-            btn.setText(self.txt("btn_open_saved").format(when=timeline_store.when_text(found[1]))
-                        + ("" if self._saved_transcript_current else self.txt("saved_outdated")))
+            when = timeline_store.when_text(found[1])
+            if self._saved_edit_entry:
+                label = self.txt("btn_open_saved_edit").format(when=when)
+            elif from_source:
+                label = self.txt("btn_open_saved_source").format(name=from_source)
+            else:
+                label = self.txt("btn_open_saved").format(when=when) + (
+                    "" if self._saved_transcript_current else self.txt("saved_outdated"))
+            btn.setText(label)
             btn.setToolTip(self.txt("tt_open_saved"))
         btn.setVisible(bool(found))
 
@@ -1668,10 +1713,121 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         log_info(f"Opening the saved transcript of the current timeline: {os.path.basename(self._saved_transcript_path)}")
         self._open_saved_transcript()
 
+    def _source_of_edit_name(self, tl_name):
+        """'Interview StoryCraft Edit 3' -> 'Interview' (older BadWords edits too), else None."""
+        import re
+        m = re.match(r"^(.*?)\s+(?:StoryCraft|BadWords) Edit \d+$", str(tl_name or ""))
+        return m.group(1) if m else None
+
     def _open_saved_transcript(self):
+        entry = getattr(self, '_saved_edit_entry', None)
+        if entry:
+            self._load_edit(entry)  # the edit itself, not its source
+            return
         path = getattr(self, '_saved_transcript_path', None)
         if path and os.path.exists(path):
             self._on_import_project(override_path=path)
+
+    # ── Edits library: every edit cut from the same source timeline ──────────────────────────
+    def _edit_ctx(self):
+        """(saves folder, Resolve project, source timeline) of the open transcript, or None."""
+        snap = getattr(self, '_transcription_source', None) or {}
+        tl = snap.get('timeline_name')
+        if not tl:
+            return None
+        try:
+            proj = self.engine._get_resolve_project_name() or ""
+        except Exception:
+            proj = ""
+        return self.engine.os_doc.get_saves_folder(), proj, tl
+
+    def _edits_overview(self, sort="date"):
+        """([edit entries], source backup line) for the Edits box."""
+        from handlers import edit_library, timeline_store
+        ctx = self._edit_ctx()
+        if not ctx:
+            return [], ""
+        entries = edit_library.list_edits(*ctx, sort=sort)
+        b = edit_library.source_backup(*ctx)
+        line = self.txt("edits_source_backup").format(when=timeline_store.when_text(b[1])) if b else ""
+        return entries, line
+
+    def _backup_source(self):
+        """Keep a copy of the source timeline in the StoryCraft folder (only when it changed)."""
+        from handlers import edit_library
+        ctx = self._edit_ctx()
+        rh = getattr(self.engine, 'resolve_handler', None)
+        if ctx and rh is not None:
+            try:
+                edit_library.backup_source(rh, *ctx)
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"_backup_source: {e}")
+
+    def _record_edit(self, new_tl_name, clean_ops):
+        """A new edit went to Resolve: remember its StoryCraft state with the source's other edits."""
+        from handlers import edit_library
+        ctx = self._edit_ctx()
+        if not ctx or not new_tl_name:
+            return
+        try:
+            rh = getattr(self.engine, 'resolve_handler', None)
+            length = rh.get_timeline_length_s(new_tl_name) if rh else None
+            if not length:
+                fps = getattr(rh, 'fps', None) or 24.0
+                length = sum(o['e'] - o['s'] for o in clean_ops or []) / fps
+            board = self.story_board.state() if getattr(self, 'story_board', None) is not None and self.story_board.sentences else None
+            story = getattr(self, '_story', None)
+            edit_library.record_edit(*ctx, new_tl_name, length, self._build_data_packet(), board,
+                                     clips=len(story["clips"]) if story else len(clean_ops or []),
+                                     signature=getattr(self, '_edit_signature', None))
+            self._current_edit_name = new_tl_name
+            self._backup_source()
+            if getattr(self, 'story_board', None) is not None:
+                self.story_board.refresh_edits()
+        except Exception as e:
+            from osdoc import log_error
+            log_error(f"_record_edit: {e}")
+
+    def _load_edit(self, entry):
+        """Continue from an earlier edit: its transcript, marks, speakers and story board, and its
+        timeline opened in Resolve (when it is still there)."""
+        import json
+        path = entry.get("state_path")
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                self._pending_board = json.load(f).get("story_board")
+        except Exception:
+            self._pending_board = None
+        if getattr(self, 'story_board', None) is not None:
+            self.story_board.sentences = []
+            self.story_board._restored_for = None
+        self._current_edit_name = entry.get("name")
+        if entry.get("sig"):
+            prefs = self.engine.load_preferences() or {}
+            sent = dict(prefs.get('sent_edits') or {})
+            sent[self._sent_key()] = {"sig": entry["sig"], "name": entry.get("name"),
+                                      "fp": self._timeline_fp(entry.get("name"))}
+            self.engine.save_preferences({'sent_edits': sent})
+            self._sync_paused = None
+        rh = getattr(self.engine, 'resolve_handler', None)
+        try:
+            if rh is not None and rh.timeline_exists(entry.get("name")):
+                rh.set_current_timeline(entry["name"])
+        except Exception:
+            pass
+        self._on_import_project(override_path=path)
+        self._show_temporary_status(self.txt("msg_edit_loaded").format(name=entry.get("name")))
+
+    def _forget_edit(self, entry):
+        from handlers import edit_library
+        ctx = self._edit_ctx()
+        if ctx:
+            edit_library.forget_edit(*ctx, entry.get("name"))
+            if getattr(self, 'story_board', None) is not None:
+                self.story_board.refresh_edits()
 
     def _save_timeline_transcript_soon(self):
         """Keep this timeline's transcript (background), e.g. right after it was transcribed."""
@@ -1680,6 +1836,7 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         packet = self._build_data_packet()
         if packet:
             threading.Thread(target=lambda: timeline_store.save(self.engine, packet, keep_previous=True), daemon=True).start()
+        QTimer.singleShot(500, self._backup_source)  # the source timeline, kept with its edits
 
     _AVOID_COLORS = ("Orange", "Brown", "Beige", "Pink", "Purple", "Teal", "Lime", "Yellow", "Apricot")
 
@@ -1735,45 +1892,82 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if btn is not None and btn.isChecked():
             btn.setChecked(False)
 
-    def _apply_resolve_speakers(self, words):
-        """Resolve named the speakers: whoever talks most is the main voice; the others get the Interviewer
-        marker (created once, set to Keep), so the AI sees them as INTERVIEWER and nothing is cut by it."""
-        import collections
-        counts = collections.Counter(w.get('speaker') for w in words or [] if w.get('speaker'))
-        if len(counts) < 2:
+    _SWEAR_COLORS = ("Pink", "Apricot", "Yellow", "Lime", "Purple", "Teal", "Beige", "Brown", "Orange")
+
+    def _swear_marker(self):
+        for m in (self.engine.load_preferences() or {}).get('custom_markers', []) or []:
+            if m.get('role') == 'swear' and m.get('color'):
+                return m
+        return None
+
+    def _swear_status(self):
+        m = self._swear_marker()
+        return f"custom_{m['color']}" if m else None
+
+    def _ensure_swear_marker(self):
+        """The Swear words marker, created once and set to Bleep (picture kept, voice under a tone)."""
+        m = self._swear_marker()
+        if m:
+            return m
+        prefs = self.engine.load_preferences() or {}
+        markers = list(prefs.get('custom_markers', []) or [])
+        used = {x.get('color', '').lower() for x in markers}
+        color = next((c for c in self._SWEAR_COLORS if c.lower() not in used), None)
+        if color is None:
+            return None
+        m = {"name": self.txt("marker_swear"), "color": color, "role": "swear"}
+        markers.append(m)
+        prefs['custom_markers'] = markers
+        prefs['plain_colors'] = [c for c in (prefs.get('plain_colors', []) or []) if c.lower() != color.lower()]
+        prefs['auto_cut_colors'] = [c for c in (prefs.get('auto_cut_colors', []) or []) if c.lower() != color.lower()]
+        prefs['bleep_colors'] = [c for c in (prefs.get('bleep_colors', []) or []) if c.lower() != color.lower()] + [color]
+        self.engine.save_preferences(prefs)
+        btn = getattr(self, 'color_cut_buttons', {}).get(color)
+        if btn is not None and btn.isChecked():
+            btn.setChecked(False)
+        if hasattr(self, 'markers_layout'):
+            self._build_marker_radio_buttons()
+            self._rebuild_mark_strip()
+        return m
+
+    def _detect_swears(self):
+        """Mark the swear words of the transcript (its language's list, plus the user's own words)."""
+        import finishing
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
             return
-        main = counts.most_common(1)[0][0]
-        status = self._interviewer_status()
-        if status is None:
-            prefs = self.engine.load_preferences() or {}
-            markers = list(prefs.get('custom_markers', []) or [])
-            used = {m.get('color', '').lower() for m in markers}
-            color = next((c for c in ("Teal", "Purple", "Pink", "Lime", "Yellow", "Apricot", "Beige", "Brown")
-                          if c.lower() not in used), None)
-            if color is None:
-                return
-            markers.append({"name": self.txt("marker_interviewer"), "color": color, "role": "speaker2"})
-            prefs['custom_markers'] = markers
-            prefs['plain_colors'] = [c for c in (prefs.get('plain_colors', []) or []) if c.lower() != color.lower()] + [color]
-            prefs['auto_cut_colors'] = [c for c in (prefs.get('auto_cut_colors', []) or []) if c.lower() != color.lower()]
-            self.engine.save_preferences(prefs)
-            btn = getattr(self, 'color_cut_buttons', {}).get(color)
-            if btn is not None and btn.isChecked():
-                btn.setChecked(False)
-            if hasattr(self, 'markers_layout'):
-                self._build_marker_radio_buttons()
-                self._rebuild_mark_strip()
-            status = f"custom_{color}"
-        n = 0
-        for w in words:
-            if w.get('speaker') and w['speaker'] != main and w.get('type') not in ('silence', 'inaudible') \
-                    and not w.get('manual_status'):
-                w['status'] = status
-                w['ai_mark'] = status
-                w['is_auto'] = False
-                n += 1
-        from osdoc import log_info
-        log_info(f"Resolve speakers: {len(counts)} voices; {n} words of the other voice(s) marked Interviewer")
+        m = self._ensure_swear_marker()
+        if m is None:
+            self._show_temporary_status(self.txt("msg_swear_no_color"))
+            return
+        status = f"custom_{m['color']}"
+        prefs = self.engine.load_preferences() or {}
+        lang = canvas.words_data[0].get('meta_language') or prefs.get('lang') or "en"
+        ids = [i for i in finishing.find_swears(canvas.words_data, lang, prefs.get('swear_words_extra'))
+               if not canvas.words_data[i].get('manual_status')]
+
+        def _mark(w):
+            w['status'] = status
+            w['ai_mark'] = status
+            w['is_auto'] = True
+        n = self._mark_words(ids, _mark)
+        self._show_temporary_status(self.txt("msg_swear_done").format(count=n))
+        self._refresh_detection_counts()
+
+    def _apply_resolve_speakers(self, words):
+        """Resolve named the speakers (w['speaker']): they become the transcript's speakers, numbered
+        by how much they talk and keeping Resolve's names. No marks are set; roles and Leave out are
+        edited in the Speakers card."""
+        import speakers_model as SM
+        n = SM.from_resolve(words, self._spk_name_fmt())
+        if n:
+            from osdoc import log_info
+            log_info(f"Resolve speakers: {n} voices")
+            canvas = getattr(self, 'text_canvas', None)
+            if canvas is not None and canvas.words_data is words:
+                self._speakers_changed()
+            elif hasattr(self, '_refresh_speakers_card'):
+                self._refresh_speakers_card()
 
     def _speaker_marker(self):
         """The custom marker used for the second speaker: one named like "speaker", else the first one."""
@@ -1842,6 +2036,414 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             return algorithms.ai_verdict(w)
 
         QTimer.singleShot(250, _poll)
+
+    # ── Speakers (speakers_model): who says what, up to 10 voices ───────────────────────────────
+
+    def _spk_words(self):
+        canvas = getattr(self, 'text_canvas', None)
+        return canvas.words_data if canvas is not None and canvas.words_data else None
+
+    def _spk_name_fmt(self):
+        return self.txt("spk_default_name")  # "Speaker {n}"
+
+    def _speakers_changed(self, push_undo=False):
+        """Re-lay out the transcript (name tags), refresh cuts, the Speakers card and autosave."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is not None:
+            canvas.refresh_layout()
+        if getattr(self, 'waveform_timeline', None) and canvas is not None:
+            self.waveform_timeline.set_words_data(canvas.words_data)
+        self._refresh_cut_preview()
+        if hasattr(self, '_refresh_speakers_card'):
+            self._refresh_speakers_card()
+        if hasattr(self, 'autosave_manager'):
+            self.autosave_manager.schedule(self._build_autosave_payload)
+
+    def _speaker_edit(self, fn):
+        """Run fn(words) as one undo step (speaker of every word + the speaker list)."""
+        import speakers_model as SM
+        words = self._spk_words()
+        if not words:
+            return None
+        before = {i: w.get('spk') for i, w in enumerate(words)}
+        meta = SM.get(words)
+        result = fn(words)
+        changed = {i: old for i, old in before.items() if words[i].get('spk') != old}
+        if (changed or SM.get(words) != meta) and hasattr(self, 'undo_manager'):
+            self.undo_manager.push({"type": "speakers", "spk": changed, "meta": meta, "changes": {"_": 1}})
+        self._speakers_changed()
+        return result
+
+    def _ensure_speakers(self, words):
+        """No speakers yet: everyone is Speaker 1 (the main voice), so a passage can be given to another."""
+        import speakers_model as SM
+        if not SM.has_speakers(words):
+            for w in words:
+                if SM.is_spoken(w):
+                    w['spk'] = 1
+            SM.put(words, [SM.make(1, self._spk_name_fmt().format(n=1), "main")])
+
+    def _selection_set_speaker(self, ids, spk_id):
+        import speakers_model as SM
+
+        def _do(words):
+            self._ensure_speakers(words)
+            SM.assign(words, ids, spk_id)
+        self._speaker_edit(_do)
+
+    def _selection_new_speaker(self, ids):
+        import speakers_model as SM
+
+        def _do(words):
+            self._ensure_speakers(words)
+            nid = SM.add(words, self._spk_name_fmt())
+            if nid:
+                SM.assign(words, ids, nid)
+            return nid
+        if self._speaker_edit(_do) is None:
+            self._show_temporary_status(self.txt("msg_spk_max").format(n=SM.MAX_SPEAKERS))
+
+    def _speaker_icon(self, color):
+        from PySide6.QtGui import QPixmap, QPainter, QColor, QIcon
+        pm = QPixmap(config.S(12), config.S(12))
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setBrush(QColor(color))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(1, 1, pm.width() - 2, pm.height() - 2)
+        p.end()
+        return QIcon(pm)
+
+    def _fill_speaker_menu(self, menu, ids, current=None):
+        """Speaker submenu for a passage: every speaker, then New speaker."""
+        import speakers_model as SM
+        words = self._spk_words()
+        speakers = SM.get(words) if words else []
+        if not speakers:
+            speakers = [SM.make(1, self._spk_name_fmt().format(n=1), "main")]
+        for s in speakers:
+            a = menu.addAction(self._speaker_icon(s['color']), s['name'],
+                               lambda sid=s['id']: self._selection_set_speaker(ids, sid))
+            if current is not None and s['id'] == current:
+                a.setCheckable(True)
+                a.setChecked(True)
+        menu.addSeparator()
+        a = menu.addAction(self.txt("menu_spk_new"), lambda: self._selection_new_speaker(ids))
+        a.setEnabled(len(speakers) < SM.MAX_SPEAKERS)
+
+    def _speaker_turn_menu(self, first, global_pos):
+        """Clicked a name tag: change this turn's speaker, or edit the speaker."""
+        import speakers_model as SM
+        from gui.widgets.menus import context_menu
+        words = self._spk_words()
+        if not words:
+            return
+        turn = SM.turn_at(words, first)
+        if not turn:
+            return
+        a, b, sid = turn
+        info = SM.by_id(words).get(sid) or {}
+        ids = list(range(a, b + 1))
+        t = self.txt
+        menu = context_menu(self)
+        head = menu.addAction(self._speaker_icon(info.get('color', '#888')), info.get('name', f"#{sid}"))
+        head.setEnabled(False)
+        menu.addAction(t("menu_sel_play"), lambda: self._selection_play(ids))
+        sub = context_menu(menu)
+        sub.setTitle(t("menu_spk_turn_to"))
+        menu.addMenu(sub)
+        self._fill_speaker_menu(sub, ids, current=sid)
+        others = [o for o in SM.get(words) if o['id'] != sid]
+        if others:  # every turn of this speaker goes to another one (fixes a voice split in two)
+            mm = context_menu(menu)
+            mm.setTitle(t("menu_spk_merge"))
+            menu.addMenu(mm)
+            for o in others:
+                mm.addAction(self._speaker_icon(o['color']), o['name'], lambda d=o['id']: self._merge_speaker(sid, d))
+        menu.addSeparator()
+        menu.addAction(t("menu_spk_rename"), lambda: self._rename_speaker(sid))
+        role_menu = context_menu(menu)
+        role_menu.setTitle(t("menu_spk_role"))
+        menu.addMenu(role_menu)
+        for role in SM.ROLES:
+            ra = role_menu.addAction(t(f"spk_role_{role}"), lambda r=role: self._set_speaker_field(sid, role=r))
+            ra.setCheckable(True)
+            ra.setChecked(info.get('role') == role)
+        lo = menu.addAction(t("spk_leave_out"), lambda: self._set_speaker_field(sid, leave_out=not info.get('leave_out')))
+        lo.setCheckable(True)
+        lo.setChecked(bool(info.get('leave_out')))
+        menu.exec(global_pos)
+
+    def _set_speaker_field(self, sid, **fields):
+        import speakers_model as SM
+        self._speaker_edit(lambda words: SM.update(words, sid, **fields))
+
+    def _rename_speaker(self, sid):
+        import speakers_model as SM
+        from PySide6.QtWidgets import QInputDialog
+        words = self._spk_words()
+        info = SM.by_id(words).get(sid) if words else None
+        if not info:
+            return
+        name, ok = QInputDialog.getText(self, self.txt("menu_spk_rename"), self.txt("lbl_spk_name"), text=info['name'])
+        if ok and name.strip():
+            self._set_speaker_field(sid, name=name.strip()[:40])
+
+    def _merge_speaker(self, src, dst):
+        import speakers_model as SM
+        self._speaker_edit(lambda words: SM.merge(words, src, dst))
+
+    def _remove_speaker(self, sid):
+        """Remove a speaker from the list; its words go to the main voice (the lowest other id)."""
+        import speakers_model as SM
+        words = self._spk_words()
+        others = [s['id'] for s in SM.get(words or []) if s['id'] != sid]
+        if others:
+            self._merge_speaker(sid, others[0])
+        else:
+            def _clear(words):
+                SM.assign(words, range(len(words)), None)
+                SM.put(words, [])
+            self._speaker_edit(_clear)
+
+    def _migrate_speakers(self, words):
+        """Older transcripts: the second-speaker marker becomes Speaker 2 (marks are kept)."""
+        import speakers_model as SM
+        QTimer.singleShot(0, self._refresh_speakers_card)  # every transcript load
+        if not words or SM.has_speakers(words):
+            return
+        if (self.engine.load_preferences() or {}).get('auto_detect_speakers', True):
+            # an older transcript without speakers: find them (skipped if the marker migration gives some)
+            QTimer.singleShot(2500, lambda: self._detect_speakers(auto=True))
+        status = self._interviewer_status()
+        if status:
+            name = next((m.get('name') for m in (self.engine.load_preferences() or {}).get('custom_markers', []) or []
+                         if f"custom_{m.get('color')}" == status), None)
+            SM.migrate_marker(words, status, name, self._spk_name_fmt())
+
+    def _detect_speakers(self, auto=False):
+        """Find the voices (Auto, or the count chosen in the Speakers card) in the background.
+        auto: started by StoryCraft after a transcription: silent when it can't run, and skipped when
+        the transcript already has speakers (Resolve's, or ones the user set)."""
+        import threading
+        import speakers_model as SM
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data or getattr(self, '_speaker_job', None):
+            return
+        if auto and SM.has_speakers(canvas.words_data):
+            return
+        count_pref = (self.engine.load_preferences() or {}).get('speaker_count')
+        if auto and count_pref == 1:
+            return  # one voice: nothing to find
+        audio_path = canvas.words_data[0].get("meta_audio_path") or getattr(self.engine, 'last_audio_path', None)
+        if not audio_path or not os.path.exists(audio_path):
+            if not auto:
+                CustomMsgBox(self, config.APP_NAME, self.txt("msg_speaker_no_audio"), self.txt("btn_ok")).exec()
+            return
+        combo = getattr(self, 'cmb_spk_count', None)
+        n = (count_pref if count_pref and count_pref > 1 else None) if auto else (combo.currentData() if combo is not None else None)
+        words = [dict(w) for w in canvas.words_data]
+        job = {"done": False, "error": None, "labels": None, "info": None, "progress": 0.0}
+        self._speaker_job = job
+        import time as _time
+        job["t0"] = _time.time()
+        from osdoc import log_info
+        log_info(f"Speaker detection started ({'auto' if auto else 'Detect'}; speakers: {n or 'auto'})")
+        self._show_temporary_status(self.txt("msg_spk_running"), 600000)
+        btn = getattr(self, 'btn_det_speakers', None)
+        if btn is not None:
+            btn.setEnabled(False)
+
+        def _work():
+            try:
+                from engine import speakers
+                mp = speakers.ensure_model(self.engine.models_dir)
+                audio = speakers.load_audio(getattr(self.engine, 'ffmpeg_cmd', 'ffmpeg'), audio_path)
+                job["labels"], job["info"] = speakers.find_speakers(
+                    audio, words, mp, n_speakers=n, progress=lambda f: job.__setitem__("progress", f))
+            except Exception as e:
+                job["error"] = str(e)
+            job["done"] = True
+
+        threading.Thread(target=_work, daemon=True).start()
+
+        def _poll():
+            b = getattr(self, 'btn_det_speakers', None)
+            if not job["done"]:
+                if b is not None:
+                    b.setText(self.txt("btn_det_running").format(pct=int(round(100 * (job.get("progress") or 0)))))
+                QTimer.singleShot(250, _poll)
+                return
+            self._speaker_job = None
+            if b is not None:
+                b.setEnabled(True)
+                b.setText(self.txt("btn_det_detect"))
+            info = job.get("info") or {}
+            log_info(f"Speaker detection done: {info.get('count')} voices in {_time.time() - job['t0']:.0f}s"
+                     + (f" (error: {job['error']})" if job["error"] else ""))
+            if job["error"] or job["labels"] is None:
+                from osdoc import log_error
+                log_error(f"Speaker detection failed: {job['error']}")
+                self._show_temporary_status(self.txt("msg_speaker_failed"))
+                return
+            if len(job["labels"]) != len(canvas.words_data):
+                return  # the transcript changed meanwhile
+            import speakers_model as SM
+            if auto and SM.has_speakers(canvas.words_data):
+                return  # speakers were set by hand while this ran
+            count = self._speaker_edit(lambda w: SM.apply_labels(w, job["labels"], self._spk_name_fmt()))
+            try:  # keep them with the timeline's saved transcript, so they aren't detected again
+                import threading
+                from handlers import timeline_store
+                packet = self._build_data_packet()
+                if packet:
+                    threading.Thread(target=lambda: timeline_store.save(self.engine, packet), daemon=True).start()
+            except Exception:
+                pass
+            self._show_temporary_status(self.txt("msg_spk_done").format(count=count or 0))
+
+        QTimer.singleShot(250, _poll)
+
+    def _speaker_sample_ids(self, sid):
+        """Word indices of this speaker's longest turn (to hear who it is)."""
+        import speakers_model as SM
+        words = self._spk_words() or []
+        best = None
+        for a, b, s in SM.turns(words):
+            if s == sid:
+                d = float(words[b].get('end', 0)) - float(words[a].get('start', 0))
+                if best is None or d > best[0]:
+                    best = (d, a, b)
+        return list(range(best[1], best[2] + 1)) if best else []
+
+    def _refresh_speakers_card(self):
+        """One row per speaker in the Speakers card (detection panel)."""
+        import speakers_model as SM
+        from PySide6.QtWidgets import QLineEdit, QComboBox, QHBoxLayout, QVBoxLayout, QWidget
+        from gui.widgets.menus import context_menu
+        rows = getattr(self, 'speakers_rows', None)
+        if rows is None:
+            return
+        while rows.count():
+            item = rows.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        words = self._spk_words() or []
+        speakers = SM.get(words)
+        if not speakers:
+            hint = QLabel(self.txt("spk_empty"))
+            hint.setWordWrap(True)
+            hint.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(8.5)}pt; background: transparent;")
+            rows.addWidget(hint)
+            return
+        talk = SM.talk_seconds(words)
+        small = f"""
+            QPushButton {{ background: #2a2a2a; color: #d0d0d0; border: 1px solid #3a3a3a; border-radius: {config.S(4)}px;
+                padding: {config.S(2)}px {config.S(6)}px; font-size: {config.FS(8.5)}pt; }}
+            QPushButton:hover {{ color: #ffffff; border-color: #555; }}"""
+        for s in speakers:
+            sid = s['id']
+            row = QWidget()
+            row.setStyleSheet("background: transparent;")
+            v = QVBoxLayout(row)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(config.S(4))
+            l1 = QHBoxLayout()
+            l1.setSpacing(config.S(6))
+
+            dot = QPushButton("")
+            dot.setFixedSize(config.S(14), config.S(14))
+            dot.setCursor(Qt.PointingHandCursor)
+            dot.setToolTip(self.txt("tt_spk_color"))
+            dot.setStyleSheet(f"QPushButton {{ background: {s['color']}; border: none; border-radius: {config.S(7)}px; }}")
+
+            def _pick_color(_=False, sid=sid, btn=dot):
+                m = context_menu(self)
+                for c in SM.PALETTE:
+                    m.addAction(self._speaker_icon(c), "", lambda c=c: self._set_speaker_field(sid, color=c))
+                m.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+            dot.clicked.connect(_pick_color)
+            l1.addWidget(dot)
+
+            name = QLineEdit(s['name'])
+            name.setMaxLength(40)
+            name.setToolTip(self.txt("tt_spk_name"))
+            name.setStyleSheet(f"""
+                QLineEdit {{ background: transparent; color: {s['color']}; border: 1px solid transparent;
+                    border-radius: {config.S(4)}px; padding: {config.S(1)}px {config.S(3)}px; font-weight: bold; }}
+                QLineEdit:hover {{ border-color: #3a3a3a; }}
+                QLineEdit:focus {{ border-color: #555; background: #222; color: #ffffff; }}""")
+            name.editingFinished.connect(lambda sid=sid, e=name, old=s['name']:
+                                         self._set_speaker_field(sid, name=e.text().strip()[:40])
+                                         if e.text().strip() and e.text().strip() != old else None)
+            l1.addWidget(name, 1)
+
+            secs = int(round(talk.get(sid, 0)))
+            tl = QLabel(f"{secs // 60}:{secs % 60:02d}")
+            tl.setToolTip(self.txt("tt_spk_talk"))
+            tl.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(8.5)}pt; background: transparent;")
+            l1.addWidget(tl)
+
+            play = QPushButton("▶")
+            play.setCursor(Qt.PointingHandCursor)
+            play.setToolTip(self.txt("tt_spk_play"))
+            play.setStyleSheet(small)
+            play.clicked.connect(lambda _=False, sid=sid: (lambda ids: self._selection_play(ids) if ids else None)(self._speaker_sample_ids(sid)))
+            l1.addWidget(play)
+
+            more = QPushButton("⋯")
+            more.setCursor(Qt.PointingHandCursor)
+            more.setStyleSheet(small)
+
+            def _more(_=False, sid=sid, btn=more):
+                m = context_menu(self)
+                others = [o for o in SM.get(self._spk_words() or []) if o['id'] != sid]
+                if others:
+                    mm = context_menu(m)
+                    mm.setTitle(self.txt("menu_spk_merge"))
+                    m.addMenu(mm)
+                    for o in others:
+                        mm.addAction(self._speaker_icon(o['color']), o['name'], lambda d=o['id']: self._merge_speaker(sid, d))
+                m.addAction(self.txt("menu_spk_remove"), lambda: self._remove_speaker(sid))
+                m.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+            more.clicked.connect(_more)
+            l1.addWidget(more)
+            v.addLayout(l1)
+
+            l2 = QHBoxLayout()
+            l2.setSpacing(config.S(6))
+            l2.setContentsMargins(config.S(20), 0, 0, 0)
+            role = QComboBox()
+            for r in SM.ROLES:
+                role.addItem(self.txt(f"spk_role_{r}"), r)
+            role.setCurrentIndex(max(0, SM.ROLES.index(s.get('role', 'other'))))
+            role.setToolTip(self.txt("tt_spk_role"))
+            role.setCursor(Qt.PointingHandCursor)
+            role.setStyleSheet(self.cmb_spk_count.styleSheet() if hasattr(self, 'cmb_spk_count') else "")
+            role.currentIndexChanged.connect(lambda i, sid=sid, c=role: self._set_speaker_field(sid, role=c.itemData(i)))
+            l2.addWidget(role)
+            if (self.engine.load_preferences() or {}).get('camera_mode') == 'speaker':
+                cam = QComboBox()
+                for n in range(1, 7):
+                    cam.addItem(self.txt("spk_camera").format(n=n), n)
+                cam.setCurrentIndex(max(0, min(5, int(s.get('camera') or sid) - 1)))
+                cam.setToolTip(self.txt("tt_spk_camera"))
+                cam.setCursor(Qt.PointingHandCursor)
+                cam.setStyleSheet(role.styleSheet())
+                cam.currentIndexChanged.connect(lambda i, sid=sid, c=cam: self._set_speaker_field(sid, camera=c.itemData(i)))
+                l2.addWidget(cam)
+            l2.addStretch()
+            lo_lbl = QLabel(self.txt("spk_leave_out"))
+            lo_lbl.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(8.5)}pt; background: transparent;")
+            l2.addWidget(lo_lbl)
+            lo = ToggleSwitch()
+            lo.setChecked(bool(s.get('leave_out')))
+            lo.setToolTip(self.txt("tt_spk_leave_out"))
+            lo.toggled.connect(lambda c, sid=sid: QTimer.singleShot(0, lambda: self._set_speaker_field(sid, leave_out=c)))
+            l2.addWidget(lo)
+            v.addLayout(l2)
+            rows.addWidget(row)
 
     def _restore_ai_kind(self, kind):
         ids = self._ai_kind_ids(kind)
@@ -2400,13 +3002,16 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         removed = [self._AI_COLOR_NAMES.get(c, c.lower()) for c in prefs.get('auto_cut_colors', [])]
         if prefs.get('silence_cut'):
             removed.append("silence")
+        import speakers_model
         snap = getattr(self, '_transcription_source', None) or {}
         target = prefs.get('story_target_s') or None
         return algorithms.build_ai_transcript(
             canvas.words_data, ops, fps, title=snap.get('timeline_name', ''), removed=removed,
             offset=prefs.get('offset', 0.133), target_s=target, clarity_fn=self._clarity_scorer(),
             avoid_fn=(lambda w, s=self._avoid_status(): w.get('status') == s) if self._avoid_status() else None,
-            speaker_fn=(lambda w, s=self._interviewer_status(): w.get('status') == s) if self._interviewer_status() else None)
+            speaker_fn=(lambda w, s=self._interviewer_status(): w.get('status') == s)
+            if self._interviewer_status() and not speakers_model.has_speakers(canvas.words_data) else None,
+            speakers=speakers_model.get(canvas.words_data) or None)
 
     def _interviewer_status(self):
         """Status of the second-speaker marker, only when one is named like it (speaker / interview)."""
@@ -2429,12 +3034,38 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             return None
         if cache and cache[0] == audio_path:
             return cache[1]
-        try:
-            audio = speakers.load_audio(getattr(self.engine, 'ffmpeg_cmd', 'ffmpeg'), audio_path)
-            self._clarity_audio = (audio_path, audio)
-            return audio
-        except Exception:
-            return None
+        # One decode per file, on its own thread (an hour takes seconds): the UI thread waits in a local
+        # event loop so the window keeps drawing (loading animation); other threads just wait for it.
+        import threading
+        with _EDIT_AUDIO_LOCK:
+            job = getattr(self, '_edit_audio_job', None)
+            if not job or job['path'] != audio_path or (job['audio'] is None and not job['thread'].is_alive()):
+                ffmpeg = getattr(self.engine, 'ffmpeg_cmd', 'ffmpeg')
+                job = {'path': audio_path, 'audio': None}
+
+                def _decode(job=job):
+                    try:
+                        job['audio'] = speakers.load_audio(ffmpeg, audio_path)
+                    except Exception:
+                        job['audio'] = None
+                job['thread'] = threading.Thread(target=_decode, daemon=True)
+                job['thread'].start()
+                self._edit_audio_job = job
+        th = job['thread']
+        if th.is_alive() and threading.current_thread() is threading.main_thread():
+            from PySide6.QtCore import QEventLoop, QTimer
+            loop = QEventLoop()
+            poll = QTimer()
+            poll.setInterval(30)
+            poll.timeout.connect(lambda: loop.quit() if not th.is_alive() else None)
+            poll.start()
+            if th.is_alive():
+                loop.exec(QEventLoop.ExcludeUserInputEvents)
+            poll.stop()
+        th.join()
+        if job['audio'] is not None and getattr(self, '_edit_audio_job', None) is job:
+            self._clarity_audio = (audio_path, job['audio'])
+        return job['audio']
 
     def _clarity_scorer(self):
         """Clarity 0-100 per stretch of the recording (Whisper confidence + speech level), cached per audio file."""
@@ -2484,12 +3115,19 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         self._show_temporary_status(self.txt("msg_cut_review_copied").format(cuts=n))
 
     def _on_copy_ai_transcript(self):
+        import speakers_model as SM
         text, sentences = self._build_ai_transcript()
         if not text:
             return
         QApplication.clipboard().setText(text)
         self._remember_ai_sentences(sentences)
-        self._show_temporary_status(self.txt("msg_ai_transcript_copied").format(count=len(sentences)))
+        msg = self.txt("msg_ai_transcript_copied").format(count=len(sentences))
+        words = self._spk_words() or []
+        if getattr(self, '_speaker_job', None):
+            msg += " · " + self.txt("msg_ai_no_speakers_yet")
+        elif len(SM.get(words)) < 2:
+            msg += " · " + self.txt("msg_ai_no_speakers")
+        self._show_temporary_status(msg, 8000)
 
     def _on_export_ai_transcript(self):
         text, sentences = self._build_ai_transcript()
@@ -2519,6 +3157,28 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         name = snap.get('timeline_name') or snap.get('source_file') or "Transcript"
         safe = "".join(c for c in os.path.basename(str(name)) if c.isalnum() or c in ' -_').strip() or "Transcript"
         return os.path.join(self.engine.os_doc.get_saves_folder(), "ai_story", f"{safe}.json")
+
+    def _build_story_from_script(self):
+        """Story board in script order: each script line's kept take, off-script passages left out."""
+        import algorithms
+        canvas = getattr(self, 'text_canvas', None)
+        board = getattr(self, 'story_board', None)
+        if canvas is None or not canvas.words_data or board is None:
+            return
+        script = self.text_script.toPlainText().strip() if hasattr(self, 'text_script') else ""
+        if not script:
+            CustomMsgBox(self, config.APP_NAME, self.txt("msg_script_story_need"), self.txt("btn_ok")).exec()
+            return
+        _, sentences = self._build_ai_transcript()
+        blocks = algorithms.story_from_script(script, sentences or [])
+        if not blocks:
+            self._show_temporary_status(self.txt("msg_script_story_none"))
+            return
+        self._remember_ai_sentences(sentences)
+        board.load(sentences, blocks)
+        board._sync_story()
+        self._show_temporary_status(self.txt("msg_script_story_done").format(
+            lines=len([l for l in algorithms._script_lines_for_side_by_side(script) if l.strip()]), blocks=len(blocks)))
 
     def _remember_ai_sentences(self, sentences):
         """The IDs the AI sees depend on the cut settings at export time, so keep that exact
@@ -2703,12 +3363,27 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                 dlg = CustomMsgBox(self, self.txt("lbl_error"), f"{self.txt('msg_load_project_failed')}:\n{err}", self.txt("btn_ok"))
                 dlg.exec()
             self._import_worker.finished_error.connect(_on_import_err)
-            self._import_worker.finished_success.connect(self._apply_imported_project)
+            self._import_worker.finished_success.connect(self._apply_import_after_animation)
             self._import_worker.start()
 
         except Exception as e:
             from osdoc import log_error as _le
             _le(f"_on_import_project initialization error: {e}")
+
+    def _apply_import_after_animation(self, state: dict, meta: dict):
+        """A project opens in a fraction of a second: let the loading screen's mark finish tracing its S
+        before the project is applied, instead of cutting the animation at its first frames."""
+        mark = getattr(self, 'processing_mark', None)
+        wait = 0.0
+        try:
+            if mark is not None and self._stack.currentIndex() == 1:
+                wait = mark.seconds_until_traced()
+        except Exception:
+            wait = 0.0
+        if wait <= 0.02:
+            self._apply_imported_project(state, meta)
+        else:
+            QTimer.singleShot(int(wait * 1000), lambda: self._apply_imported_project(state, meta))
 
     def _apply_imported_project(self, state: dict, meta: dict):
         try:
@@ -3854,6 +4529,8 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if btn is not None:
             btn.setEnabled(enabled)
             btn.setText(self.txt("btn_assemble") if enabled or not text else text)
+            if enabled:
+                self._update_send_state()
 
     def _update_resolve_chip(self):
         """Title bar chip: is DaVinci Resolve connected (cheap check, no call into Resolve)."""
@@ -3893,8 +4570,10 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             # Pauses and colours: what gets removed. If both live on one side, the colours win.
             self._open_activity("silence")
             self._open_activity("assembly")
+            self._set_transcript_view("original")  # the cut words must show to be un-cut
         elif step == "compose":
             self._open_activity("story")
+            self._set_transcript_view("edit")
 
     def _update_workflow_summary(self, total_s):
         lbl = getattr(self, 'lbl_workflow_summary', None)
@@ -3962,6 +4641,7 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         else:
             ops.sort(key=lambda o: o['s'])
         self._update_workflow_summary(sum(o['e'] - o['s'] for o in ops) / fps if fps else 0.0)
+        self._update_edit_view(ops, fps, offset)
         segments = []
         for op in ops:
             s, e = float(op['start_s']), float(op['end_s'])
@@ -3972,6 +4652,190 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             else:
                 segments.append((s, e))
         ap.set_edit_segments(segments)
+
+    # ── The edit as the next Send builds it: Edited transcript view and Send state ──────────
+    _SEND_PREF_KEYS = ('voice_isolation', 'captions_resolve', 'camera_mode', 'bleep_colors',
+                       'crossfade_frames', 'mark_jump_cuts')
+
+    def _update_edit_view(self, ops, fps, offset):
+        """Word order of the edit for the Edited view (paragraph per story block), and the edit's
+        fingerprint, so Send to Resolve can tell whether Resolve already has it."""
+        import finishing
+        import hashlib
+        import speakers_model as SM
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return
+        placed = finishing.placed_words(canvas.words_data, ops, fps, offset)
+        order, starts, last_order = [], [], object()
+        for i, _t0, _t1, op in placed:
+            if op.get('order', None) != last_order:
+                starts.append(i)
+                last_order = op.get('order', None)
+            order.append(i)
+        canvas.set_edit_order(order, starts if any('order' in op for op in ops) else ())
+        prefs = self.engine.load_preferences() or {}
+        sig = hashlib.sha1(repr((
+            [(o['s'], o['e'], o.get('order'), bool(o.get('bleep')), o.get('spk')) for o in ops],
+            [prefs.get(k) for k in self._SEND_PREF_KEYS],
+            [(sp['id'], sp.get('camera')) for sp in SM.get(canvas.words_data)],
+        )).encode()).hexdigest()[:16]
+        self._edit_signature = sig
+        self._update_send_state()
+
+    def _sent_key(self):
+        snap = getattr(self, '_transcription_source', None) or {}
+        return snap.get('timeline_name') or snap.get('source_file') or ""
+
+    def _update_send_state(self):
+        """Send to Resolve says whether Resolve has the current edit: 'In Resolve' when the last
+        timeline StoryCraft sent matches it, 'Send changes' once the edit has moved on."""
+        btn = getattr(self, 'btn_send_resolve', None)
+        if btn is None or not btn.isEnabled():
+            return
+        sent = ((self.engine.load_preferences() or {}).get('sent_edits') or {}).get(self._sent_key())
+        cur = getattr(self, '_edit_signature', None)
+        if not sent or not cur:
+            state, text, tip = "new", self.txt("btn_assemble"), self.txt("tt_send_resolve")
+        elif sent.get("sig") == cur:
+            state, text = "synced", self.txt("btn_send_synced")
+            tip = self.txt("tt_send_synced").format(name=sent.get("name", ""))
+        else:
+            state, text = "changed", self.txt("btn_send_changed")
+            tip = self.txt("tt_send_changed").format(name=sent.get("name", ""))
+            if self._sync_on():
+                if getattr(self, '_sync_paused', None):
+                    tip = self.txt("tt_sync_paused").format(name=self._sync_paused)
+                else:
+                    tip = self.txt("tt_sync_soon").format(name=sent.get("name", ""))
+                    self._schedule_sync()
+        if getattr(self, '_sync_job', None):
+            state, text = "changed", self.txt("btn_send_syncing")
+        btn.setText(text)
+        btn.setToolTip(tip)
+        if btn.property("sync") != state:
+            btn.setProperty("sync", state)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _timeline_fp(self, name):
+        rh = getattr(self.engine, 'resolve_handler', None)
+        try:
+            return rh.compute_timeline_fingerprint(name) if rh is not None and name else None
+        except Exception:
+            return None
+
+    def _remember_sent(self, new_tl_name, sig=None):
+        prefs = self.engine.load_preferences() or {}
+        sent = dict(prefs.get('sent_edits') or {})
+        sent[self._sent_key()] = {"sig": sig or getattr(self, '_edit_signature', None), "name": new_tl_name,
+                                  "fp": self._timeline_fp(new_tl_name)}
+        self.engine.save_preferences({'sent_edits': sent})
+        self._sync_paused = None
+        self._update_send_state()
+
+    # ── Keep Resolve in sync: the last sent timeline follows the edit ─────────────────────────
+    def _sync_on(self):
+        return bool((self.engine.load_preferences() or {}).get('resolve_sync'))
+
+    def _schedule_sync(self):
+        if not self._sync_on() or getattr(self, '_sync_paused', None):
+            return
+        t = getattr(self, '_sync_timer', None)
+        if t is None:
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(self._sync_to_resolve)
+            self._sync_timer = t
+        t.start(4000)  # a few seconds after the last change
+
+    def _sync_to_resolve(self):
+        """Rebuild the last sent timeline with the current edit, in place, if it is untouched in
+        Resolve since StoryCraft made it. Otherwise pause: a hand edit is never overwritten."""
+        import threading
+        from osdoc import log_info
+        if not self._sync_on():
+            return
+        if (getattr(self, '_sync_job', None) or getattr(self, '_assembly_thread', None)
+                or getattr(self, '_is_live_transcribing', False)):
+            self._schedule_sync()
+            return
+        canvas = getattr(self, 'text_canvas', None)
+        prefs0 = self.engine.load_preferences() or {}
+        sent = (prefs0.get('sent_edits') or {}).get(self._sent_key())
+        sig = getattr(self, '_edit_signature', None)
+        if canvas is None or not canvas.words_data or not sent or not sent.get("name") or sent.get("sig") == sig:
+            return
+        rh = getattr(self.engine, 'resolve_handler', None)
+        name = sent["name"]
+        try:
+            if rh is None or not rh.is_connected():
+                return
+            if not rh.timeline_exists(name):
+                self._sync_paused = name
+                self._show_temporary_status(self.txt("msg_sync_gone").format(name=name), 8000)
+                self._update_send_state()
+                return
+        except Exception:
+            return
+        if sent.get("fp") and self._timeline_fp(name) != sent["fp"]:
+            self._sync_paused = name
+            log_info(f"Keep in sync paused: '{name}' was edited in Resolve")
+            self._show_temporary_status(self.txt("msg_sync_paused").format(name=name), 10000)
+            self._update_send_state()
+            return
+        export_data, prefs = self._assembly_inputs()
+        job = {"done": False, "result": None, "sig": sig, "old": name}
+        self._sync_job = job
+        log_info(f"Keep in sync: updating '{name}'")
+        self._update_send_state()
+
+        def _work():
+            try:
+                job["result"] = self.engine.assemble_timeline(export_data, prefs)
+            except Exception as e:
+                job["error"] = str(e)
+            job["done"] = True
+        threading.Thread(target=_work, daemon=True).start()
+
+        def _poll():
+            if not job["done"]:
+                QTimer.singleShot(300, _poll)
+                return
+            self._sync_job = None
+            res = job.get("result")
+            ok = isinstance(res, tuple) and len(res) == 4 and res[0]
+            if not ok:
+                self._show_temporary_status(self.txt("msg_sync_failed"), 8000)
+                self._update_send_state()
+                return
+            new_name, ops = res[2], res[3]
+            final = new_name
+            try:
+                if rh.delete_timeline_by_name(job["old"]) and rh.rename_timeline(new_name, job["old"]):
+                    final = job["old"]
+                rh.set_current_timeline(final)
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"Keep in sync: replacing '{job['old']}' failed: {e}")
+            self._record_edit(final, ops)
+            self._remember_sent(final, sig=job["sig"])
+            log_info(f"Keep in sync: '{final}' updated")
+            self._show_temporary_status(self.txt("msg_sync_done").format(name=final), 5000)
+            if getattr(self, '_edit_signature', None) != job["sig"]:
+                self._schedule_sync()  # more changes came in meanwhile
+        QTimer.singleShot(300, _poll)
+
+    def _set_transcript_view(self, mode):
+        """'original' or 'edit' (only what the edit keeps, in play order)."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is not None:
+            canvas.set_edit_view(mode == "edit")
+        seg = getattr(self, 'seg_transcript_view', None)
+        if seg is not None and seg.value() != mode:
+            seg.blockSignals(True)
+            seg.set_value(mode) if hasattr(seg, 'set_value') else None
+            seg.blockSignals(False)
 
     def _update_color_legend(self, surviving_ops, cut_ops):
         """Summarise which colours the next Assemble keeps (as coloured clips) or leaves out.
@@ -4072,8 +4936,11 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
             from gui.widgets.segmented import SegmentedChoice
             mode = self._legend_mode(key)
-            seg = SegmentedChoice([("keep", self.txt("btn_pause_keep")), ("mark", self.txt("btn_pause_mark")),
-                                   ("cut", self.txt("btn_pause_cut"))], mode or "mark", compact=True)
+            choices = [("keep", self.txt("btn_pause_keep")), ("mark", self.txt("btn_pause_mark")),
+                       ("cut", self.txt("btn_pause_cut"))]
+            if key != "Tan":
+                choices.append(("bleep", self.txt("btn_color_bleep")))  # picture kept, voice under a tone
+            seg = SegmentedChoice(choices, mode or "mark", compact=True)
             if mode is None:
                 seg.setEnabled(False)
                 seg.setToolTip(self.txt("tt_legend_not_removable"))
@@ -4094,7 +4961,10 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             return None
         if btn.isChecked():
             return "cut"
-        plain = {c.lower() for c in (self.engine.load_preferences() or {}).get('plain_colors', []) or []}
+        prefs = self.engine.load_preferences() or {}
+        if key.lower() in {c.lower() for c in prefs.get('bleep_colors', []) or []}:
+            return "bleep"
+        plain = {c.lower() for c in prefs.get('plain_colors', []) or []}
         return "keep" if key.lower() in plain else "mark"
 
     def _on_legend_mode(self, key, mode):
@@ -4113,6 +4983,10 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if mode == "keep":
             plain.append(key)
         prefs['plain_colors'] = plain
+        bleep = [c for c in (prefs.get('bleep_colors', []) or []) if c.lower() != key.lower()]
+        if mode == "bleep":
+            bleep.append(key)
+        prefs['bleep_colors'] = bleep
         self.engine.save_preferences(prefs)
         btn = getattr(self, 'color_cut_buttons', {}).get(key)
         if btn is not None and btn.isChecked() != (mode == "cut"):
@@ -4132,13 +5006,9 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if btn is not None and btn.isChecked() != checked:
             btn.setChecked(checked)
 
-    def _on_assemble(self):
-        if getattr(self, '_is_live_transcribing', False):
-            return
-        if not hasattr(self, 'text_canvas') or not self.text_canvas.words_data: return
-
-        from PySide6.QtWidgets import QApplication
-
+    def _assembly_inputs(self):
+        """(words, prefs) exactly as Send to Resolve uses them: saved prefs, the panel's toggles,
+        the story and the source snapshot. Shared by Send and by Keep Resolve in sync."""
         prefs = self.engine.load_preferences() or {}
         
         # INJECT SOURCE SNAPSHOT & TRACK SELECTION
@@ -4191,6 +5061,20 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                     w['status'] = None
             if w.get('status') == 'inaudible' and not mark_inaudible:
                 w['status'] = None
+
+        return export_data, prefs
+
+    def _on_assemble(self):
+        if getattr(self, '_is_live_transcribing', False):
+            return
+        if getattr(self, '_sync_job', None):
+            self._show_temporary_status(self.txt("msg_sync_busy"), 5000)
+            return
+        if not hasattr(self, 'text_canvas') or not self.text_canvas.words_data: return
+
+        from PySide6.QtWidgets import QApplication
+
+        export_data, prefs = self._assembly_inputs()
 
         # UI PREP — infinite bar starts immediately so it animates during assembly
         self._panel_left.hide()
@@ -4288,6 +5172,16 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
     def _on_assembly_success(self, new_tl_name, clean_ops):
         if hasattr(self, 'go_to_page'): self.go_to_page(2)
+        self._record_edit(new_tl_name, clean_ops)
+        self._remember_sent(new_tl_name)
+        fin = getattr(self.engine, 'last_finish', None) or {}
+        notes = []
+        if fin.get("srt_path"):
+            notes.append(self.txt("msg_fin_srt").format(name=os.path.basename(fin["srt_path"])))
+        if fin.get("exports"):
+            notes.append(self.txt("msg_fin_exports").format(count=len(fin["exports"])))
+        if notes:
+            QTimer.singleShot(1500, lambda: self._show_temporary_status(" · ".join(notes), 8000))
         if getattr(self, 'resolve_handler', None) and new_tl_name:
             try:
                 self.resolve_handler.set_current_timeline(new_tl_name)
@@ -5087,6 +5981,9 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             return
             
         self._apply_resolve_speakers(words_data)
+        if (self.engine.load_preferences() or {}).get('auto_detect_speakers', True):
+            # Whisper doesn't say who speaks: find the voices in the background (Resolve's are kept)
+            QTimer.singleShot(2000, lambda: self._detect_speakers(auto=True))
         self.go_to_page(2)
         QTimer.singleShot(0, self._measure_sounds_soon)  # in case the engine couldn't (no audio then)
 

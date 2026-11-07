@@ -54,6 +54,17 @@ class UndoManager:
             self.main_window.autosave_manager.schedule(self.main_window._build_autosave_payload)
 
     def _apply_action(self, action):
+        if action.get('type') == 'speakers':
+            # {"spk": {index: speaker or None}, "meta": speaker list}: swap with the current state
+            import speakers_model
+            words = self.canvas.words_data
+            back = {i: words[i].get('spk') for i in action['spk'] if 0 <= i < len(words)}
+            back_meta = speakers_model.get(words)
+            speakers_model.restore(words, list(action['spk'].items()))
+            speakers_model.put(words, action['meta'])
+            if hasattr(self.main_window, '_speakers_changed'):
+                self.main_window._speakers_changed(push_undo=False)
+            return {"type": "speakers", "spk": back, "meta": back_meta, "changes": {"_": 1}}
         if action.get('type') == 'words':
             current = self.canvas.words_data
             self.canvas.load_data(action['words'])

@@ -2516,7 +2516,7 @@ _AI_ABBREVIATIONS = {
 
 
 def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_words=40, offset=0.133,
-                        target_s=None, clarity_fn=None, avoid_fn=None, speaker_fn=None):
+                        target_s=None, clarity_fn=None, avoid_fn=None, speaker_fn=None, speakers=None):
     """
     Plain-text transcript of what survives the cuts, meant to be pasted into an LLM.
     One sentence per line with a stable ID, its time in the edit and in the source
@@ -2529,6 +2529,8 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
     avoid_fn(word) -> True for words the editor tagged as not to be used (noise, hesitation):
     their sentences are flagged AVOID.
     speaker_fn(word) -> True for words of the second speaker (the interviewer): shown as INTERVIEWER.
+    speakers: the transcript's speaker list (speakers_model.get) when it has one; then every moment
+    starts with its speaker's name (words carry w['spk']) and speaker_fn is not needed.
     Sentences are grouped into moments (whole thoughts, see story_moments); the AI picks moments
     or runs of sentences, and each sentence dict gets its moment ID under "moment".
     Returns (text, sentences); each sentence keeps its source range for later reassembly.
@@ -2551,6 +2553,7 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
         return (dest[i] + f - ops[i]['s']) / fps
 
     spoken = []  # (start, end) of every spoken word, kept or cut: sentence edges sit between them
+    split_by_speaker = bool(speakers and len(speakers) >= 2)
     groups, cur = [], []
     for w in words_data:
         if w.get('type') in ('silence', 'inaudible') or w.get('is_inaudible'):
@@ -2564,8 +2567,11 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
         mid_edit = edit_time(mid + offset)
         if mid_edit is None:
             continue  # cut
+        if split_by_speaker and cur and cur[-1][7] != w.get('spk'):
+            groups.append(cur)  # the speaker changes mid-sentence: two sentences, one per speaker
+            cur = []
         cur.append((text, start, end, max(0.0, mid_edit - (mid - start)), len(spoken) - 1,
-                    bool(avoid_fn and avoid_fn(w)), bool(speaker_fn and speaker_fn(w))))
+                    bool(avoid_fn and avoid_fn(w)), bool(speaker_fn and speaker_fn(w)), w.get('spk')))
         if (text[-1] in '.?!…' and text.lower().lstrip('"\'(“‘') not in _AI_ABBREVIATIONS) or len(cur) >= max_words:
             groups.append(cur)
             cur = []
@@ -2580,6 +2586,12 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
         return cut_s, max(cut_e, e1)
 
     width = max(3, len(str(len(groups))))
+    spk_info = {sp["id"]: sp for sp in (speakers or [])} if speakers and len(speakers) >= 2 else {}
+
+    def _majority(g):
+        ids = [w[7] for w in g if w[7]]
+        return max(set(ids), key=ids.count) if ids else None
+
     sentences = []
     for n, g in enumerate(groups, 1):
         cut_s, cut_e = edges(g[0][4], g[-1][4])
@@ -2587,7 +2599,9 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
                           "src_start": g[0][1], "src_end": g[-1][2], "cut_start": cut_s, "cut_end": cut_e,
                           "edit_start": g[0][3], "words": len(g), "length": round(max(0.0, cut_e - cut_s), 2),
                           "clarity": clarity_fn(g[0][1], g[-1][2]) if clarity_fn else None,
-                          "avoid": any(w[5] for w in g), "speaker2": sum(w[6] for w in g) * 2 > len(g)})
+                          "avoid": any(w[5] for w in g), "spk": _majority(g) if spk_info else None,
+                          "speaker2": (spk_info.get(_majority(g), {}).get("role") == "interviewer") if spk_info
+                          else sum(w[6] for w in g) * 2 > len(g)})
 
     moments = story_moments(sentences)
     mwidth = max(2, len(str(len(moments))))
@@ -2601,9 +2615,25 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
         cl = [s["clarity"] for s in run if s.get("clarity") is not None]
         ids = run[0]["id"] if f == l else f"{run[0]['id']}-{run[-1]['id']}"
         tags = (f" | clarity {round(sum(cl) / len(cl))}" if cl else "") + (" | AVOID" if any(s["avoid"] for s in run) else "")
-        who = "INTERVIEWER: " if run[0].get("speaker2") else ""
+        if spk_info:
+            who = (spk_info.get(run[0].get("spk"), {}).get("name") or "?").upper() + ": "
+        else:
+            who = "INTERVIEWER: " if run[0].get("speaker2") else ""
         body = " ".join(f"({s['id']}) {s['text']}" for s in run)
         lines.append(f"[{mid} | {ids} | at {_ai_tc(run[0]['src_start'])} | {length:.1f}s{tags}] {who}{body}")
+
+    if spk_info:
+        role_txt = {"main": "main voice", "interviewer": "interviewer: questions, reactions"}
+        speakers_line = ("# SPEAKERS: " + ", ".join(
+            sp["name"] + (f" ({role_txt[sp.get('role')]})" if sp.get("role") in role_txt else "")
+            for sp in sorted(spk_info.values(), key=lambda x: x["id"]) if not sp.get("leave_out"))
+            + ". Each moment starts with who speaks, e.g. NAME:.")
+        ivw = [sp["name"].upper() for sp in spk_info.values() if sp.get("role") == "interviewer" and not sp.get("leave_out")]
+        interviewer_rule = (f"Leave {' and '.join(ivw)} out unless a question is needed to understand the answer."
+                            if ivw else "Keep each speaker's words in their own clips; don't cut one voice into another.")
+    else:
+        speakers_line = "# INTERVIEWER: the second speaker (questions, reactions)."
+        interviewer_rule = "Leave the INTERVIEWER out unless a question is needed to understand the answer."
 
     mm = lambda s: f"{int(round(s)) // 60}:{int(round(s)) % 60:02d}"
     if target_s:
@@ -2619,7 +2649,8 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
         "# The transcript is split into MOMENTS: whole thoughts, in recording order. Each line:",
         "# [moment ID | its sentence IDs | time in the recording | length in seconds | clarity | AVOID] text,"
         " with every sentence prefixed by its ID, e.g. (S041).",
-        "# INTERVIEWER: the second speaker (questions, reactions). Clarity 0-100: how clearly it was spoken and"
+        speakers_line,
+        "# Clarity 0-100: how clearly it was spoken and"
         " recorded. AVOID: the editor tagged it as unusable (background noise, a voice behind, an awkward hesitation).",
         "#",
         "# When asked for an edit or a story:",
@@ -2636,7 +2667,7 @@ def build_ai_transcript(words_data, kept_ops, fps, title="", removed=None, max_w
         " single sentences from all over the recording.",
         "# - Change the order when it tells the story better, but keep causes before effects.",
         "# - Say each point once: no two clips for the same point (the same thanks, praise or idea), and no clip that"
-        " repeats itself. Leave the INTERVIEWER out unless a question is needed to understand the answer.",
+        " repeats itself. " + interviewer_rule,
         "# - Don't use AVOID moments. Prefer clarity 70 and up; below 60 only if nothing else says it.",
         length_rule,
         "# Answer format: the OUTLINE, then a line that says EDIT, then one clip per line in play order: a moment"
@@ -2662,7 +2693,7 @@ def story_moments(sentences, max_gap=1.5, max_len=45.0, min_len=8.0):
     max_len seconds; moments shorter than min_len join a close neighbour of the same kind.
     Returns [(first, last), ...] of sentence indices, in recording order.
     """
-    kind = lambda s: (bool(s.get("speaker2")), bool(s.get("avoid")))
+    kind = lambda s: (s.get("spk"), bool(s.get("speaker2")), bool(s.get("avoid")))
     span = lambda f, l: sentences[l]["cut_end"] - sentences[f]["cut_start"]
     out = []
     for i, s in enumerate(sentences):
@@ -2950,7 +2981,7 @@ def review_cuts(clips, sentences, level_fn=None):
             lb = level_fn(first["src_start"], first["src_start"] + 1.5)
             if la is not None and lb is not None and abs(la - lb) >= 4.0:
                 notes.append(f"loudness {'drops' if lb < la else 'rises'} {abs(la - lb):.0f} dB")
-        if first.get("speaker2") != last.get("speaker2"):
+        if first.get("speaker2") != last.get("speaker2") or first.get("spk") != last.get("spk"):
             notes.append("speaker changes")
         joins.append({"n": k, "before_id": last["id"], "after_id": first["id"], "before": tail(last["text"]),
                       "after": head(first["text"]), "jump": jump, "notes": notes})
@@ -3196,3 +3227,43 @@ def clear_mark(w):
     w['selected'] = False
     w['is_auto'] = False
     w['overlay_suppressed'] = True
+
+
+
+def story_from_script(script_text, sentences, min_match=0.5, max_span=4):
+    """The story in script order. For each script line, the run of 1 to max_span consecutive kept
+    sentences that says it best (word overlap, F1 >= min_match); on a tie the later take wins, as
+    the last take is usually the good one. Sentences used once aren't used again; lines nobody said
+    are skipped, and passages said off-script are left out.
+    Returns [(first, last), ...] sentence-index blocks for the story board."""
+    from collections import Counter
+    lines = [l for l in _script_lines_for_side_by_side(script_text or "") if l.strip()]
+    toks = [Counter(t for t in (super_clean(x) for x in (s.get("text") or "").split()) if t) for s in sentences]
+    blocks, used = [], set()
+    for line in lines:
+        want = Counter(t for t in (super_clean(x) for x in line.split()) if t)
+        n_want = sum(want.values())
+        if not n_want:
+            continue
+        best = None
+        for f in range(len(sentences)):
+            have = Counter()
+            for l in range(f, min(len(sentences), f + max_span)):
+                if l in used:
+                    break
+                have += toks[l]
+                common = sum((have & want).values())
+                if not common:
+                    continue
+                p, r = common / max(1, sum(have.values())), common / n_want
+                f1 = 2 * p * r / (p + r)
+                if f1 >= min_match and (best is None or f1 >= best[0] - 1e-9):
+                    best = (f1, f, l)
+        if best:
+            _, f, l = best
+            used.update(range(f, l + 1))
+            if blocks and blocks[-1][1] + 1 == f:
+                blocks[-1] = (blocks[-1][0], l)
+            else:
+                blocks.append((f, l))
+    return blocks

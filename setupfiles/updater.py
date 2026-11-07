@@ -899,21 +899,30 @@ if os.path.isdir(INSTALL_DIR):
             globs["__file__"] = main_script
             exec(code, globs)
 '''
+    # Resolve lists every Scripts/Utility folder in one menu, so the wrapper lives in exactly one
+    # (the first writable, user-level first) and copies elsewhere are removed.
     script_dirs = get_resolve_script_dirs()
-    count = 0
+    deployed_to = None
     for sd in script_dirs:
-        try:
-            os.makedirs(sd, exist_ok=True)
-            w_path = os.path.join(sd, f"{APP_NAME}.py")  # never BadWords.py: that is the original app's
-            with open(w_path, "w", encoding="utf-8") as f:
-                f.write(wrapper_content)
-            if os.name != "nt":
-                os.chmod(w_path, 0o755)
-            count += 1
-        except Exception as e:
-            warn(f"Could not deploy DaVinci wrapper to {sd}: {e}")
-    if count > 0:
-        info(f"DaVinci Resolve script wrapper updated in {count} locations.")
+        w_path = os.path.join(sd, f"{APP_NAME}.py")  # never BadWords.py: that is the original app's
+        if deployed_to is None:
+            try:
+                os.makedirs(sd, exist_ok=True)
+                with open(w_path, "w", encoding="utf-8") as f:
+                    f.write(wrapper_content)
+                if os.name != "nt":
+                    os.chmod(w_path, 0o755)
+                deployed_to = w_path
+            except Exception as e:
+                warn(f"Could not deploy DaVinci wrapper to {sd}: {e}")
+        elif os.path.isfile(w_path):
+            try:
+                os.remove(w_path)
+                info(f"Removed duplicate DaVinci wrapper: {w_path}")
+            except Exception as e:
+                warn(f"Could not remove duplicate DaVinci wrapper {w_path}: {e}")
+    if deployed_to:
+        info(f"DaVinci Resolve script wrapper updated: {deployed_to}")
 
 def ensure_ffmpeg(bin_dir):
     ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"

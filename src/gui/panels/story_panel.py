@@ -231,23 +231,23 @@ class StoryBoard(QWidget):
         row.addWidget(win._create_info_icon("tt_board"))
         lay.addLayout(row)
 
-        # Actions in a 2 x 2 grid of equal buttons: they fit a narrow panel without being cut off
-        from PySide6.QtWidgets import QGridLayout, QSizePolicy, QLineEdit
+        # "From transcript" alone, then the External AI round trip in its own framed group, in the
+        # order it is used: Copy for AI -> (AI chat) -> Import AI edit, then Review cuts to refine.
+        # Full-width buttons, so long translations fit a narrow panel without being cut off.
+        from PySide6.QtWidgets import QSizePolicy, QLineEdit
         self.btn_fill = QPushButton(win.txt("board_fill"))
         self.btn_fill.setToolTip(win.txt("tt_board_fill"))
         self.btn_fill.clicked.connect(self.fill_from_transcript)
-        self.btn_ai = QPushButton(win.txt("board_import_ai"))
-        self.btn_ai.clicked.connect(lambda: win._on_import_ai_story())
         self.btn_copy_ai = QPushButton(win.txt("board_copy_ai"))
         self.btn_copy_ai.setToolTip(win.txt("tt_board_copy_ai"))
         self.btn_copy_ai.clicked.connect(lambda: win._on_copy_ai_transcript())
+        self.btn_ai = QPushButton(win.txt("board_import_ai"))
+        self.btn_ai.setToolTip(win.txt("tt_board_import_ai"))
+        self.btn_ai.clicked.connect(lambda: win._on_import_ai_story())
         self.btn_review = QPushButton(win.txt("board_review_cuts"))
         self.btn_review.setToolTip(win.txt("tt_board_review_cuts"))
         self.btn_review.clicked.connect(lambda: win._on_review_cuts())
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(config.S(6))
-        grid.setVerticalSpacing(config.S(6))
-        for n, b in enumerate((self.btn_fill, self.btn_ai, self.btn_copy_ai, self.btn_review)):
+        for b in (self.btn_fill, self.btn_copy_ai, self.btn_ai, self.btn_review):
             b.setCursor(Qt.PointingHandCursor)
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             b.setMinimumHeight(config.S(26))
@@ -257,8 +257,39 @@ class StoryBoard(QWidget):
                 QPushButton:hover {{ color: #ffffff; border-color: #555; }}
                 QPushButton:disabled {{ color: #555; }}
             """)
-            grid.addWidget(b, n // 2, n % 2)
-        lay.addLayout(grid)
+        self.btn_from_script = QPushButton(win.txt("board_from_script"))
+        self.btn_from_script.setToolTip(win.txt("tt_board_from_script"))
+        self.btn_from_script.clicked.connect(lambda: win._build_story_from_script())
+        self.btn_from_script.setCursor(Qt.PointingHandCursor)
+        self.btn_from_script.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.btn_from_script.setMinimumHeight(config.S(26))
+        self.btn_from_script.setStyleSheet(self.btn_fill.styleSheet())
+        fill_row = QHBoxLayout()
+        fill_row.setSpacing(config.S(6))
+        fill_row.addWidget(self.btn_fill)
+        fill_row.addWidget(self.btn_from_script)
+        lay.addLayout(fill_row)
+
+        ai_box = QFrame()
+        ai_box.setObjectName("externalAiGroup")
+        ai_box.setStyleSheet(f"""
+            QFrame#externalAiGroup {{ background: #1e1e1e; border: 1px solid #333333;
+                border-radius: {config.S(6)}px; }}
+        """)
+        ai_lay = QVBoxLayout(ai_box)
+        ai_lay.setContentsMargins(config.S(8), config.S(6), config.S(8), config.S(8))
+        ai_lay.setSpacing(config.S(6))
+        ai_head = QHBoxLayout()
+        ai_title = QLabel(win.txt("group_external_ai").upper())
+        ai_title.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(8)}pt; font-weight: bold;"
+                               f" letter-spacing: 1px; background: transparent; border: none;")
+        ai_head.addWidget(ai_title)
+        ai_head.addStretch()
+        ai_head.addWidget(win._create_info_icon("tt_group_external_ai"))
+        ai_lay.addLayout(ai_head)
+        for b in (self.btn_copy_ai, self.btn_ai, self.btn_review):  # one per row, in the order they're used
+            ai_lay.addWidget(b)
+        lay.addWidget(ai_box)
 
         # Target length for the AI (and to compare the edit against)
         row_t = QHBoxLayout()
@@ -309,6 +340,37 @@ class StoryBoard(QWidget):
         lay.addWidget(self.lbl_unused)
         self.list_unused = _BlockList(self)
         lay.addWidget(self.list_unused, 2)
+
+        # Every edit cut from this source timeline: load one to continue from it
+        from gui.widgets.segmented import SegmentedChoice
+        self.edits_box = QFrame()
+        self.edits_box.setObjectName("editsBox")
+        self.edits_box.setStyleSheet(f"""
+            QFrame#editsBox {{ background: #1e1e1e; border: 1px solid #333333; border-radius: {config.S(6)}px; }}
+        """)
+        eb = QVBoxLayout(self.edits_box)
+        eb.setContentsMargins(config.S(8), config.S(6), config.S(8), config.S(8))
+        eb.setSpacing(config.S(4))
+        eh = QHBoxLayout()
+        et = QLabel(win.txt("edits_title").upper())
+        et.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(8)}pt; font-weight: bold; letter-spacing: 1px;"
+                         f" background: transparent; border: none;")
+        eh.addWidget(et)
+        eh.addWidget(win._create_info_icon("tt_edits_title"))
+        eh.addStretch()
+        self.edits_sort = SegmentedChoice([("date", win.txt("edits_newest")), ("length", win.txt("edits_longest"))],
+                                          "date", compact=True)
+        self.edits_sort.changed.connect(lambda _m: self.refresh_edits())
+        eh.addWidget(self.edits_sort)
+        eb.addLayout(eh)
+        self.edits_rows = QVBoxLayout()
+        self.edits_rows.setSpacing(config.S(2))
+        eb.addLayout(self.edits_rows)
+        self.lbl_source_backup = QLabel("")
+        self.lbl_source_backup.setWordWrap(True)
+        self.lbl_source_backup.setStyleSheet(f"color: #808080; font-size: {config.FS(8)}pt; background: transparent; border: none;")
+        eb.addWidget(self.lbl_source_backup)
+        lay.addWidget(self.edits_box)
 
         self._refresh_labels()
 
@@ -457,8 +519,71 @@ class StoryBoard(QWidget):
         except Exception:
             pass
 
+    def state(self):
+        """The board as saved: sentences, Edit blocks (play order) and Not used blocks."""
+        unused = [_decode(self.list_unused.item(i).data(BLOCK_ROLE)) for i in range(self.list_unused.count())]
+        return {"version": 1, "sentences": self.sentences,
+                "edit": [list(b) for b in self.edit_blocks()], "unused": [list(b) for b in unused]}
+
+    def refresh_edits(self):
+        """Rows of the Edits box: name, length, date; the loaded one highlighted."""
+        while self.edits_rows.count():
+            it = self.edits_rows.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        entries, backup = self.win._edits_overview(self.edits_sort.value() or "date")
+        if not entries:
+            empty = QLabel(self.win.txt("edits_empty"))
+            empty.setWordWrap(True)
+            empty.setStyleSheet(f"color: #777777; font-size: {config.FS(8.5)}pt; background: transparent; border: none;")
+            self.edits_rows.addWidget(empty)
+        current = getattr(self.win, '_current_edit_name', None)
+        import time as _t
+        for e in entries:
+            secs = int(round(e.get("length_s") or 0))
+            when = _t.strftime("%d %b %H:%M", _t.localtime(e.get("created") or 0))
+            b = QPushButton(f"{e['name']}    {secs // 60}:{secs % 60:02d}    {when}")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(self.win.txt("tt_edits_row"))
+            on = e["name"] == current
+            b.setStyleSheet(f"""
+                QPushButton {{ background: {'#1d2a22' if on else 'transparent'}; color: {'#ffffff' if on else '#c8c8c8'};
+                    border: 1px solid {'#2f6b45' if on else 'transparent'}; border-radius: {config.S(4)}px;
+                    text-align: left; padding: {config.S(3)}px {config.S(6)}px; font-size: {config.FS(8.5)}pt; }}
+                QPushButton:hover {{ background: #262626; color: #ffffff; }}""")
+            b.clicked.connect(lambda _=False, e=e: self.win._load_edit(e))
+            b.setContextMenuPolicy(Qt.CustomContextMenu)
+            b.customContextMenuRequested.connect(lambda pos, e=e, b=b: self._edit_menu(e, b.mapToGlobal(pos)))
+            self.edits_rows.addWidget(b)
+        self.lbl_source_backup.setText(backup or "")
+        self.lbl_source_backup.setVisible(bool(backup))
+
+    def _edit_menu(self, entry, pos):
+        from gui.widgets.menus import context_menu
+        m = context_menu(self)
+        m.addAction(self.win.txt("edits_load"), lambda: self.win._load_edit(entry))
+        m.addAction(self.win.txt("edits_forget"), lambda: self.win._forget_edit(entry))
+        m.exec(pos)
+
     def maybe_restore(self):
-        """Bring back the board saved for this timeline, once, when its transcript is loaded."""
+        """Bring back the board saved for this timeline, once, when its transcript is loaded.
+        A board waiting from a loaded edit (win._pending_board) comes first."""
+        pending = getattr(self.win, '_pending_board', None)
+        if pending:
+            self.win._pending_board = None
+            self._restored_for = self._path()
+            try:
+                sentences = pending["sentences"]
+                n = len(sentences)
+                ok = lambda b: 0 <= b[0] <= b[1] < n
+                self.load(sentences, [tuple(b) for b in pending.get("edit", []) if ok(b)],
+                          [tuple(b) for b in pending.get("unused", []) if ok(b)])
+                self._sync_story()
+            except Exception:
+                pass
+            self.refresh_edits()
+            return
+        self.refresh_edits()
         path = self._path()
         if not path or path == getattr(self, "_restored_for", None):
             return

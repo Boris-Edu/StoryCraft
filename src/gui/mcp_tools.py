@@ -81,12 +81,17 @@ def build_tools(win):
         if t:
             head += f" (target {_mmss(t)}, between {_mmss(t * 0.9)} and {_mmss(t * 1.1)})"
         lines = [head]
+        import speakers_model
+        names = {sp["id"]: sp["name"] for sp in speakers_model.get(getattr(win.text_canvas, 'words_data', None) or [])}
         for k, c in enumerate(clips, 1):
             run = sentences[c["first"]:c["last"] + 1]
             ids = c["start_id"] if c["start_id"] == c["end_id"] else f'{c["start_id"]}-{c["end_id"]}'
             cl = [s["clarity"] for s in run if s.get("clarity") is not None]
+            spk_ids = {s.get("spk") for s in run if s.get("spk")}
+            who = ", " + " + ".join(names.get(i, "?").upper() for i in sorted(spk_ids)) if names and spk_ids else (
+                ", INTERVIEWER" if all(s.get("speaker2") for s in run) else "")
             tags = (f", clarity {round(sum(cl) / len(cl))}" if cl else "") + (", AVOID" if any(s.get("avoid") for s in run) else "") \
-                + (", INTERVIEWER" if all(s.get("speaker2") for s in run) else "")
+                + who
             text = c["text"] if len(c["text"]) <= 90 else c["text"][:89] + "…"
             lines.append(f"{k}. {ids} ({run[0].get('moment', '')}, {c['cut_end'] - c['cut_start']:.1f}s{tags}): {text}")
         if unknown:

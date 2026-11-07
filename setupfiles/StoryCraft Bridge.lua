@@ -268,8 +268,8 @@ end
 local platform = detect_platform()
 local sep = (platform == "Windows") and "\\" or "/"
 
--- Configuration: BadWords Installation Directory (injected by installer / auto-healer)
-local INSTALL_DIR = [[__BADWORDS_INSTALL_DIR__]]
+-- Configuration: StoryCraft installation directory (injected by installer / auto-healer)
+local INSTALL_DIR = [[__STORYCRAFT_INSTALL_DIR__]]
 
 local function get_all_mailbox_dirs()
     local dirs = {}

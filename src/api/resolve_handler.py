@@ -177,6 +177,11 @@ class ResolveHandler:
 
                 # 1.5. Jeśli obiekt resolve został pobrany: inicjalizacja projektu
                 if self.resolve:
+                    try:
+                        if hasattr(self.os_doc, "record_live_resolve_edition"):
+                            self.os_doc.record_live_resolve_edition(self.resolve.GetProductName() or "")
+                    except Exception as e:
+                        log_warn(f"_connect: could not record Resolve edition: {e}")
                     self.project_manager = self.resolve.GetProjectManager()
                     self.project = self.project_manager.GetCurrentProject() if self.project_manager else None
                     if self.project:
@@ -1576,6 +1581,19 @@ class ResolveHandler:
             log_error(f"delete_timeline_by_name error: {e}")
         return False
 
+    def rename_timeline(self, old_name, new_name) -> bool:
+        """Rename a timeline of the open project (the new name must be free)."""
+        if self.backend == 'bridge' or not self.project:
+            return False
+        try:
+            for i in range(1, (self.project.GetTimelineCount() or 0) + 1):
+                tl = self.project.GetTimelineByIndex(i)
+                if tl and tl.GetName() == old_name:
+                    return bool(tl.SetName(new_name))
+        except Exception as e:
+            log_error(f"rename_timeline: {e}")
+        return False
+
     def get_next_xml_index(self, source_tl_name):
         """
         Calculates the next suffix index for BadWords Filtered timelines.
@@ -1746,6 +1764,147 @@ class ResolveHandler:
                 pass
         log_info(f"polish_timeline: {fades} audio crossfade(s), {markers} jump-cut marker(s), {sounds} sound marker(s)")
         return fades, markers
+
+    # ── Finishing the new timeline: speech cleanup, cameras, bleeps, captions, exports ──
+
+    def _item_at(self, tl, track_type, track, frame):
+        """The item of this track that starts at this timeline frame, or None."""
+        for it in tl.GetItemListInTrack(track_type, track) or []:
+            if it and it.GetStart() == frame:
+                return it
+        return None
+
+    def _bleep_clip(self, wav_path):
+        """The bleep tone in the media pool (imported once into the StoryCraft bin)."""
+        mp = self.project.GetMediaPool()
+        name = os.path.basename(wav_path)
+        folder = self._get_or_create_folder(mp.GetRootFolder(), "StoryCraft") or mp.GetRootFolder()
+        for c in folder.GetClipList() or []:
+            if c and c.GetName() == name:
+                return c
+        cur = mp.GetCurrentFolder()
+        mp.SetCurrentFolder(folder)
+        try:
+            got = mp.ImportMedia([wav_path]) or []
+        finally:
+            mp.SetCurrentFolder(cur)
+        return got[0] if got else None
+
+    def finish_timeline(self, opts):
+        """On the current (just assembled) timeline. opts (all optional):
+        voice_isolation: 0-100 (0 = off); captions: True = Resolve's subtitles from audio (Studio);
+        bleeps: [(first frame, end frame)] from the timeline start, bleep_wav: path of the tone;
+        cameras: {"mode": "speaker", "ranges": [(f0, f1, speaker)], "map": {speaker: video track}}
+                 or {"mode": "smartswitch"};
+        exports: [(file path, "fcp7" | "fcpxml" | "otio" | "edl" | "aaf")].
+        Returns {step: result} for the log and the status line."""
+        out = {}
+        if self.backend == 'bridge' or not self.project:
+            return out
+        tl = self.project.GetCurrentTimeline()
+        if not tl:
+            return out
+        t0 = tl.GetStartFrame()
+        n_audio = tl.GetTrackCount("audio") or 0
+        n_video = tl.GetTrackCount("video") or 0
+
+        amount = int(opts.get("voice_isolation") or 0)
+        if amount > 0:
+            done = 0
+            for ti in range(1, n_audio + 1):
+                try:
+                    if tl.SetVoiceIsolationState(ti, {"isEnabled": True, "amount": max(1, min(100, amount))}):
+                        done += 1
+                except Exception:
+                    pass
+            out["voice_isolation"] = done
+
+        cams = opts.get("cameras") or {}
+        if cams.get("mode") == "speaker" and n_video >= 2:
+            cmap = {k: int(v) for k, v in (cams.get("map") or {}).items() if v}
+            switched = 0
+            for f0, _f1, spk in cams.get("ranges") or []:
+                want = cmap.get(spk)
+                if not want or want > n_video:
+                    continue
+                for vt in set(cmap.values()):
+                    if vt > n_video:
+                        continue
+                    it = self._item_at(tl, "video", vt, t0 + f0)
+                    if it is not None:
+                        try:
+                            it.SetClipEnabled(vt == want)
+                        except Exception:
+                            pass
+                switched += 1
+            out["cameras"] = switched
+        elif cams.get("mode") == "smartswitch":
+            ok = 0
+            for vt in range(1, n_video + 1):
+                for it in tl.GetItemListInTrack("video", vt) or []:
+                    mpi = it.GetMediaPoolItem() if it else None
+                    try:
+                        if mpi and str(mpi.GetClipProperty("Type") or "").lower().startswith("multicam"):
+                            # Default analysis looks at the picture (wide shot); when it can't, audio only
+                            if it.PerformMulticamSmartSwitch({}) or it.PerformMulticamSmartSwitch(
+                                    {"analysisMode": getattr(self.resolve, "SMART_SWITCH_ANALYSIS_MODE_AUDIO_ONLY", 2)}):
+                                ok += 1
+                    except Exception:
+                        pass
+            out["smartswitch"] = ok
+
+        bleeps = opts.get("bleeps") or []
+        if bleeps and opts.get("bleep_wav") and os.path.isfile(opts["bleep_wav"]):
+            muted = 0
+            for f0, _f1 in bleeps:
+                for ti in range(1, n_audio + 1):
+                    it = self._item_at(tl, "audio", ti, t0 + f0)
+                    if it is not None:
+                        try:
+                            it.SetClipEnabled(False)
+                            muted += 1
+                        except Exception:
+                            pass
+            tone = self._bleep_clip(opts["bleep_wav"])
+            placed = 0
+            if tone is not None and tl.AddTrack("audio", "mono"):
+                track = tl.GetTrackCount("audio")
+                try:
+                    tl.SetTrackName("audio", track, "StoryCraft bleeps")
+                except Exception:
+                    pass
+                mp = self.project.GetMediaPool()
+                for f0, f1 in bleeps:
+                    r = mp.AppendToTimeline([{"mediaPoolItem": tone, "startFrame": 0, "endFrame": max(1, f1 - f0),
+                                              "mediaType": 2, "trackIndex": track, "recordFrame": t0 + f0}])
+                    placed += 1 if r and r[0] else 0
+            out["bleeps"] = placed
+            out["bleep_muted"] = muted
+
+        if opts.get("captions"):
+            try:
+                out["captions"] = bool(tl.CreateSubtitlesFromAudio({}))
+            except Exception as e:
+                out["captions"] = f"failed: {e}"
+
+        kinds = {"fcp7": "EXPORT_FCP_7_XML", "fcpxml": "EXPORT_FCPXML_1_10", "otio": "EXPORT_OTIO",
+                 "edl": "EXPORT_EDL", "aaf": "EXPORT_AAF"}
+        exported = []
+        for path, kind in opts.get("exports") or []:
+            const = getattr(self.resolve, kinds.get(kind, ""), None)
+            if const is None:
+                continue
+            sub = getattr(self.resolve, "EXPORT_AAF_NEW", None) if kind == "aaf" else getattr(self.resolve, "EXPORT_NONE", None)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                if tl.Export(path, const, sub):
+                    exported.append(path)
+            except Exception as e:
+                log_error(f"finish_timeline: export {kind} failed: {e}")
+        if exported:
+            out["exports"] = exported
+        log_info(f"finish_timeline: {out}")
+        return out
 
     # ── Resolve's own transcription (Studio 21.1+: MediaPoolItem.GetTranscription) ──
 

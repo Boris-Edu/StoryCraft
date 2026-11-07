@@ -1505,73 +1505,48 @@ else:
         except Exception:
             pass
 
-    written = False
-    for rd in resolve_dirs:
-        try:
-            os.makedirs(rd, exist_ok=True)
+    # Resolve lists every Scripts/Utility folder in one menu: each script is written to ONE folder
+    # (the first writable, user-level first) and removed from the others.
+    #   Studio:           StoryCraft.py only; the Bridge is removed (native external scripting).
+    #   Free 21.1+:       Bridge only; StoryCraft.py is removed (Python scripting blocked).
+    #   Free < 21.1/Unknown: both.
+    want_py = not is_free_21_1
+    want_lua = (not is_studio) and bool(bridge_lua_src) and os.path.isfile(bridge_lua_src)
 
-            if is_studio:
-                # ── STUDIO EDITION ─────────────────────────────────────────────────────────────
-                # 1. StoryCraft Bridge.lua MUST NOT be installed. If present, delete it.
-                # 2. StoryCraft.py MUST be installed for native scripting.
-                target_lua = os.path.join(rd, "StoryCraft Bridge.lua")
-                if os.path.exists(target_lua):
-                    try:
-                        os.remove(target_lua)
-                        debug_log(f"Removed StoryCraft Bridge.lua (Studio uses native external scripting): {target_lua}")
-                    except Exception:
-                        pass
+    lua_code = None
+    if want_lua:
+        with open(bridge_lua_src, "r", encoding="utf-8") as bf:
+            lua_code = bf.read().replace("__STORYCRAFT_INSTALL_DIR__", install_dir.replace('\\', '/'))
+        try: os.makedirs(os.path.join(install_dir, "bridge"), exist_ok=True)
+        except Exception: pass
 
-                wp = os.path.join(rd, "StoryCraft.py")
-                with open(wp, "w", encoding="utf-8") as f:
-                    f.write(wrapper_content)
-                os.chmod(wp, 0o755)
-                debug_log(f"StoryCraft.py written to: {wp}")
-                written = True
+    def _place(name, content, wanted):
+        placed = False
+        for rd in resolve_dirs:
+            target = os.path.join(rd, name)
+            if wanted and not placed:
+                try:
+                    os.makedirs(rd, exist_ok=True)
+                    with open(target, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    os.chmod(target, 0o755)
+                    debug_log(f"{name} written to: {target}")
+                    placed = True
+                except Exception as exc:
+                    debug_log(f"Could not write {name} to {rd}: {exc}")
+            elif os.path.exists(target):
+                try:
+                    os.remove(target)
+                    debug_log(f"Removed {name} from: {target}")
+                except Exception as exc:
+                    debug_log(f"Could not remove {target}: {exc}")
+        return placed
 
-            else:
-                # ── FREE EDITION (or Unknown) ──────────────────────────────────────────────────
-                # 1. StoryCraft Bridge.lua MUST ALWAYS be installed!
-                # 2. StoryCraft.py:
-                #    - If Free >= 21.1: REMOVE StoryCraft.py (API blocked).
-                #    - If Free < 21.1: Deploy StoryCraft.py.
-                if is_free_21_1:
-                    wp = os.path.join(rd, "StoryCraft.py")
-                    if os.path.exists(wp):
-                        try:
-                            os.remove(wp)
-                            debug_log(f"Removed StoryCraft.py (blocked in Resolve Free 21.1+): {wp}")
-                        except Exception:
-                            pass
-                else:
-                    wp = os.path.join(rd, "StoryCraft.py")
-                    with open(wp, "w", encoding="utf-8") as f:
-                        f.write(wrapper_content)
-                    os.chmod(wp, 0o755)
-                    debug_log(f"StoryCraft.py written to: {wp}")
-                    written = True
-
-                if bridge_lua_src and os.path.isfile(bridge_lua_src):
-                    with open(bridge_lua_src, "r", encoding="utf-8") as bf:
-                        b_code = bf.read()
-                    clean_inst = install_dir.replace('\\', '/')
-                    b_code = b_code.replace("__STORYCRAFT_INSTALL_DIR__", clean_inst)
-
-                    # Ensure bridge folder in install_dir exists
-                    bridge_dir = os.path.join(install_dir, "bridge")
-                    try: os.makedirs(bridge_dir, exist_ok=True)
-                    except Exception: pass
-
-                    target_lua = os.path.join(rd, "StoryCraft Bridge.lua")
-                    with open(target_lua, "w", encoding="utf-8") as bf:
-                        bf.write(b_code)
-                    os.chmod(target_lua, 0o755)
-                    debug_log(f"StoryCraft Bridge.lua written to: {target_lua}")
-                    written = True
-        except Exception as exc:
-            debug_log(f"Could not write scripts to {rd}: {exc}")
-
-    return written
+    py_ok = _place("StoryCraft.py", wrapper_content, want_py)
+    lua_ok = False
+    if is_studio or want_lua:  # Free without a Bridge source: leave any installed Bridge alone
+        lua_ok = _place("StoryCraft Bridge.lua", lua_code, want_lua)
+    return py_ok or lua_ok
 
 
 def _unblock_file_windows(path):

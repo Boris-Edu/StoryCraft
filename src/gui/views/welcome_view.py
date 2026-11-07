@@ -1752,6 +1752,27 @@ def build_welcome_view(win) -> QWidget:
     win.settings_layout.addLayout(_row(win.txt("lbl_tx_source"), win.seg_tx_source))
     win.settings_layout.addSpacing(gap_field)
 
+    # ── 2c. How many people speak: found by voice right after transcribing ──
+    spk_items = [win.txt("spk_count_auto"), win.txt("spk_count_one")] + [str(n) for n in range(2, 11)]
+    win._combo_speakers = CustomDropdown(spk_items)
+    win._combo_speakers.max_visible_items = 6
+    win._combo_speakers.setFixedHeight(config.S(30))
+    win._combo_speakers.setToolTip(win.txt("tt_start_speakers"))
+    _cnt = prefs.get('speaker_count')
+    win._combo_speakers.setText(spk_items[0] if not _cnt else (spk_items[1] if _cnt == 1 else str(_cnt)))
+
+    def _save_spk_count(v, items=spk_items):
+        n = None if v == items[0] else (1 if v == items[1] else int(v))
+        win.engine.save_preferences({"speaker_count": n})
+        card = getattr(win, 'cmb_spk_count', None)
+        if card is not None and n != 1:
+            i = card.findData(n)
+            if i >= 0:
+                card.setCurrentIndex(i)
+    win._combo_speakers.valueChanged.connect(_save_spk_count)
+    win.settings_layout.addLayout(_row(win.txt("lbl_start_speakers"), win._combo_speakers))
+    win.settings_layout.addSpacing(gap_field)
+
     # ── 3. Model Selection ────────────────────────────────────────────────────
     model_items = [
         "Tiny (I wouldn't, ~0.3GB)",

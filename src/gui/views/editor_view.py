@@ -45,6 +45,8 @@ def _build_workflow_bar(win, parent) -> QWidget:
             padding: {config.S(7)}px {config.S(18)}px; font-size: {config.FS(10)}pt; font-weight: bold; }}
         QPushButton#WfSend:hover {{ background: {grad_hi}; }}
         QPushButton#WfSend:disabled {{ background: #2a2a2a; color: #666666; }}
+        QPushButton#WfSend[sync="synced"] {{ background: #1d2a22; color: #8fd19e; }}
+        QPushButton#WfSend[sync="synced"]:hover {{ background: #24352a; color: #b6e6c1; }}
         QPushButton#WfSendMore {{ background: #a855f7; color: #0b0b14; border: none;
             border-left: 1px solid rgba(11, 11, 20, 0.35); border-top-left-radius: 0px; border-bottom-left-radius: 0px;
             border-top-right-radius: {config.S(16)}px; border-bottom-right-radius: {config.S(16)}px;
@@ -88,6 +90,14 @@ def _build_workflow_bar(win, parent) -> QWidget:
             line.setStyleSheet(f"background: #333333; border: none; border-radius: 1px;")
             h.addWidget(line)
     h.addStretch(1)
+    # Which transcript is shown: the recording, or only what the edit keeps, in play order
+    from gui.widgets.segmented import SegmentedChoice
+    win.seg_transcript_view = SegmentedChoice([("original", win.txt("view_original")), ("edit", win.txt("view_edited"))],
+                                              "original", compact=True)
+    win.seg_transcript_view.setToolTip(win.txt("tt_view_edited"))
+    win.seg_transcript_view.changed.connect(lambda m: win._set_transcript_view(m))
+    h.addWidget(win.seg_transcript_view)
+    h.addSpacing(config.S(10))
     # Resolve connection chip (filled by win._update_resolve_chip)
     win.lbl_resolve_chip = QLabel("", bar)
     win.lbl_resolve_chip.hide()

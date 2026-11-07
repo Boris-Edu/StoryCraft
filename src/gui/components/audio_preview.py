@@ -413,6 +413,18 @@ class AudioPreviewWidget(QFrame):
         center_layout.addWidget(self.btn_play)
         center_layout.addWidget(self.btn_next)
 
+        # Playback speed: next to Play, where it is seen (Shift+. / Shift+, change it too)
+        self.cb_speed = SpeedDropdown()
+        self.cb_speed.addItems(list(self.SPEEDS_LABELS))
+        self.cb_speed.setFixedWidth(config.S(52))
+        self.cb_speed.setToolTip(_t("tt_playback_speed"))
+        self.cb_speed.setStyleSheet(f"""
+            QPushButton {{ background: #232323; border: 1px solid #3a3a3a; border-radius: {config.S(11)}px;
+                color: #d0d0d0; font-weight: 600; font-size: {config.FS(9)}pt; padding: {config.S(2)}px {config.S(6)}px; }}
+            QPushButton:hover {{ color: #1ed760; border-color: #1ed760; }}""")
+        center_layout.addSpacing(config.S(6))
+        center_layout.addWidget(self.cb_speed)
+
         # --- Right Section: Speed + Volume ---
         right_widget = QWidget()
         right_layout = QHBoxLayout(right_widget)
@@ -420,11 +432,6 @@ class AudioPreviewWidget(QFrame):
         right_layout.setSpacing(config.S(8))
         right_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.cb_speed = SpeedDropdown()
-        self.cb_speed.addItems(["0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x", "3.0x"])
-        self.cb_speed.setCurrentText("1.0x")
-        self.cb_speed.setFixedWidth(config.S(58))
-        right_layout.addWidget(self.cb_speed)
 
         self.lbl_vol_icon = QLabel()
         self.lbl_vol_icon.setFixedSize(config.S(18), config.S(18))
@@ -474,6 +481,11 @@ class AudioPreviewWidget(QFrame):
         self.btn_next.clicked.connect(self.skip_forward)
         self.slider_vol.valueChanged.connect(self._on_volume_changed)
         self.cb_speed.currentTextChanged.connect(self.change_speed)
+        try:  # the last speed used
+            saved = float((self.main_window.engine.load_preferences() or {}).get('playback_speed') or 1.0)
+        except Exception:
+            saved = 1.0
+        self.cb_speed.setCurrentText(self._speed_label(saved if saved in self.SPEEDS else 1.0))
         self._on_volume_changed(100)
 
         from gui.vsync import get_refresh_interval_ms
@@ -1234,17 +1246,40 @@ class AudioPreviewWidget(QFrame):
             pixmap.setDevicePixelRatio(dpr)
         self.lbl_vol_icon.setPixmap(pixmap)
 
+    SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+    SPEEDS_LABELS = tuple(f"{v:g}×" for v in SPEEDS)
+
+    @classmethod
+    def _speed_label(cls, rate):
+        return f"{rate:g}×"
+
     def change_speed(self, text: str) -> None:
-        if not text.endswith("x"):
-            return
         try:
-            new_rate = float(text[:-1])
+            new_rate = float(str(text).rstrip("x×").strip())
         except ValueError:
             return
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self._start_pos_s = self._get_audio_t()
             self._real_start_time = time.time()
         self.player.setPlaybackRate(new_rate)
+        try:
+            self.player.setPitchCompensation(True)  # voices keep their pitch when faster
+        except Exception:
+            pass
+        try:
+            self.main_window.engine.save_preferences({"playback_speed": new_rate})
+        except Exception:
+            pass
+
+    def step_speed(self, direction: int) -> None:
+        """One step faster (+1) or slower (-1), with a short note in the status line."""
+        cur = self.player.playbackRate() or 1.0
+        idx = min(range(len(self.SPEEDS)), key=lambda i: abs(self.SPEEDS[i] - cur))
+        idx = max(0, min(len(self.SPEEDS) - 1, idx + (1 if direction > 0 else -1)))
+        self.cb_speed.setCurrentText(self.SPEEDS_LABELS[idx])
+        if hasattr(self.main_window, "_show_temporary_status"):
+            self.main_window._show_temporary_status(self.main_window.txt("msg_playback_speed").format(
+                speed=self.SPEEDS_LABELS[idx]), 1500)
 
     def _on_user_scroll(self, action: int) -> None:
         if getattr(self, "tgl_centered", None) and self.tgl_centered.isChecked():
@@ -1407,14 +1442,14 @@ class AudioPreviewWidget(QFrame):
                 offset_s = prefs.get("offset", 0.133)
 
             match_t = orig_t + 0.15 - offset_s
+            # Edited view: only words the edit keeps can light up (never one that was cut)
+            allowed = canvas.edit_ids() if hasattr(canvas, 'edit_ids') else None
             for i, w_item in enumerate(canvas.words_data):
                 start_t = w_item.get("start", 0)
                 if start_t > match_t:
-                    found_idx = i - 1
                     break
-            else:
-                if canvas.words_data:
-                    found_idx = len(canvas.words_data) - 1
+                if allowed is None or i in allowed:
+                    found_idx = i
 
         if found_idx >= 0 and canvas.words_data[found_idx].get("type") == "silence":
             pass

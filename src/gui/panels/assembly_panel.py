@@ -134,15 +134,58 @@ def build_assembly_panel(win) -> QFrame:
     top.addWidget(det_st)
     l_card_det.addLayout(box)
 
-    # Second speaker: quiet, different voice (usually the interviewer); marked with a custom marker
-    box, top, bottom = _det_row("speaker", "det_speaker")
+    # Swear words: marked with their own marker, bleeped by default (Keep / Mark / Cut / Bleep in the legend)
+    box, top, bottom = _det_row("swears", "det_swears")
+    det_sw = QPushButton(win.txt("btn_det_detect"))
+    det_sw.setCursor(Qt.PointingHandCursor)
+    det_sw.setToolTip(win.txt("tt_det_swears"))
+    det_sw.setStyleSheet(_small_btn)
+    det_sw.clicked.connect(lambda: win._detect_swears())
+    top.addWidget(det_sw)
+    l_card_det.addLayout(box)
+
+    # Speakers: find up to 10 voices, then name them, set their role or leave one out of the edit.
+    # Rows are filled by win._refresh_speakers_card(); a passage changes speaker from the transcript
+    # (select it, right-click > Speaker) or by clicking a name tag.
+    from PySide6.QtWidgets import QComboBox
+    spk_box = QVBoxLayout()
+    spk_box.setSpacing(config.S(6))
+    spk_top = QHBoxLayout()
+    spk_top.setSpacing(config.S(6))
+    spk_title = QLabel(win.txt("spk_title"))
+    spk_title.setStyleSheet("font-weight: bold; background: transparent;")
+    spk_top.addWidget(spk_title)
+    spk_top.addWidget(win._create_info_icon("tt_spk_title"))
+    spk_top.addStretch()
+    win.cmb_spk_count = QComboBox()
+    win.cmb_spk_count.addItem(win.txt("spk_count_auto"), None)
+    for n in range(2, 11):
+        win.cmb_spk_count.addItem(str(n), n)
+    win.cmb_spk_count.setToolTip(win.txt("tt_spk_count"))
+    _saved_n = (win.engine.load_preferences() or {}).get('speaker_count')
+    if _saved_n and _saved_n > 1:
+        win.cmb_spk_count.setCurrentIndex(max(0, win.cmb_spk_count.findData(_saved_n)))
+    win.cmb_spk_count.currentIndexChanged.connect(
+        lambda _i: win.engine.save_preferences({"speaker_count": win.cmb_spk_count.currentData()}))
+    win.cmb_spk_count.setCursor(Qt.PointingHandCursor)
+    win.cmb_spk_count.setStyleSheet(f"""
+        QComboBox {{ background: #2a2a2a; color: #d0d0d0; border: 1px solid #3a3a3a; border-radius: {config.S(4)}px;
+            padding: {config.S(2)}px {config.S(6)}px; font-size: {config.FS(8.5)}pt; }}
+        QComboBox QAbstractItemView {{ background: #222222; color: #e6e6e6; selection-background-color: #23a559; }}
+    """)
+    spk_top.addWidget(win.cmb_spk_count)
     det_spk = QPushButton(win.txt("btn_det_detect"))
     det_spk.setCursor(Qt.PointingHandCursor)
-    det_spk.setToolTip(win.txt("tt_det_speaker"))
+    det_spk.setToolTip(win.txt("tt_det_speakers"))
     det_spk.setStyleSheet(_small_btn)
-    det_spk.clicked.connect(lambda: win._detect_second_speaker())
-    top.addWidget(det_spk)
-    l_card_det.addLayout(box)
+    det_spk.clicked.connect(lambda: win._detect_speakers())
+    win.btn_det_speakers = det_spk
+    spk_top.addWidget(det_spk)
+    spk_box.addLayout(spk_top)
+    win.speakers_rows = QVBoxLayout()
+    win.speakers_rows.setSpacing(config.S(8))
+    spk_box.addLayout(win.speakers_rows)
+    l_card_det.addLayout(spk_box)
 
     # Script differences (typos): show or hide
     box, top, bottom = _det_row("typos", "det_typos")

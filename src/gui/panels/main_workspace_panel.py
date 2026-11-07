@@ -138,6 +138,12 @@ def build_main_workspace_panel(win) -> QFrame:
 
     win.w_track_options = TrackOptionsDrawer(win, win.engine)
     layout_assemble_group.addWidget(win.w_track_options)
+
+    # After sending: speech cleanup, captions, cameras, extra exports
+    from .finishing_section import build_finishing_section
+    fin_head, fin_body = build_finishing_section(win)
+    layout_assemble_group.addWidget(fin_head)
+    layout_assemble_group.addWidget(fin_body)
     QTimer.singleShot(60, win.w_track_options.warmup)
 
     def _toggle_track_options():

@@ -243,6 +243,10 @@ class AppController:
     def _finish_startup(self, resolve, audio_engine):
         osdoc.log_info("Loading complete. Building main window.")
 
+        # Building the window keeps the UI thread busy (~2 s): the splash repaints itself meanwhile
+        if self.splash:
+            self.splash.start_build_pulse()
+
         # IMPORTANT: store on self, NOT as a local variable.
         self.main_win = gui.BadWordsGUI(audio_engine, resolve)
 
@@ -261,6 +265,7 @@ class AppController:
 
         # Close splash only after main window is displayed
         if self.splash:
+            self.splash.stop_build_pulse()
             self.splash.close()
             self.splash = None
         osdoc.log_info("Main window displayed.")

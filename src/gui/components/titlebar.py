@@ -314,6 +314,16 @@ class CustomTitleBar(QWidget):
         layout.setSpacing(0)
 
         for label, callback in items:
+            if callback is None:  # section header: (label, None)
+                head = QLabel(label.upper())
+                head.setStyleSheet(f"""
+                    QLabel {{ background: transparent; border: none; border-top: 1px solid #2a2a2a;
+                        color: #707070; font-family: "{config.UI_FONT_NAME}"; font-size: {config.FS(7.5)}pt;
+                        font-weight: bold; letter-spacing: 1px;
+                        padding: {config.S(7)}px {config.S(14)}px {config.S(3)}px {config.S(14)}px; }}
+                """)
+                layout.addWidget(head)
+                continue
             btn = QPushButton(label)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(f"""
@@ -352,6 +362,7 @@ class CustomTitleBar(QWidget):
         self._show_titlebar_popup(self.btn_menu_transcript, [
             (_t("titlebar_export_txt"), lambda: self.transcriptExportTxtRequested.emit()),
             (_t("titlebar_copy_clipboard"), lambda: self.transcriptCopyRequested.emit()),
+            (_t("group_external_ai"), None),
             (_t("titlebar_copy_ai_transcript"), lambda: self.aiTranscriptCopyRequested.emit()),
             (_t("titlebar_export_ai_transcript"), lambda: self.aiTranscriptExportRequested.emit()),
             (_t("titlebar_import_ai_story"), lambda: self.aiStoryImportRequested.emit()),

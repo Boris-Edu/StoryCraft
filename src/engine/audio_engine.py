@@ -1285,6 +1285,11 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         do_show_typos = settings.get('show_typos', True)
         raw_auto_cut = settings.get('auto_cut_colors', [])
         auto_cut_colors = [c.lower() for c in raw_auto_cut] if isinstance(raw_auto_cut, list) else []
+        # Speakers switched to "Leave out of the edit" (speakers_model): their words are cut
+        import speakers_model
+        cut_speakers = speakers_model.cut_ids(words_data)
+        # Cameras by speaker: a new clip wherever the speaker changes (nothing is cut there)
+        split_spk = bool(settings.get('split_at_speakers'))
 
         def t2f(t): return int(round(t * fps))
         
@@ -1314,6 +1319,24 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
             words_data = [w for w in words_data if w.get('start', 0.0) < audio_end_cap_s]
 
         silence_blocks_for_snap = [w for w in words_data if w.get('type') == 'silence']
+        # Silence edges in frames, indexed by start and by end: the snapping below looks up the first
+        # silence (transcript order) with an edge in a range instead of scanning them all for every word
+        import bisect as _bisect
+        _sil_f = [(t2f(s['start']), t2f(s['end'])) for s in silence_blocks_for_snap]
+        _by_s = sorted((f[0], k) for k, f in enumerate(_sil_f))
+        _by_e = sorted((f[1], k) for k, f in enumerate(_sil_f))
+        _s_keys = [x[0] for x in _by_s]
+        _e_keys = [x[0] for x in _by_e]
+
+        def first_silence_near(lo, hi):
+            """Index of the first silence whose start or end frame is in [lo, hi], or None."""
+            best = None
+            if hi >= lo:
+                for keys, pairs in ((_s_keys, _by_s), (_e_keys, _by_e)):
+                    for _f, k in pairs[_bisect.bisect_left(keys, lo):_bisect.bisect_right(keys, hi)]:
+                        if best is None or k < best:
+                            best = k
+            return best
         
         chunks = []
         current_chunk = None
@@ -1336,15 +1359,21 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
                 status = 'normal'
             if status == 'inaudible' and not do_mark_inaudible:
                 status = 'normal'
-            
+            if cut_speakers and w.get('spk') in cut_speakers:
+                status = speakers_model.CUT_STATUS
+
+            spk = w.get('spk') if split_spk else None
             if current_chunk is None:
-                current_chunk = {'status': status, 'words': [w]}
+                current_chunk = {'status': status, 'spk': spk, 'words': [w]}
             else:
-                if current_chunk['status'] == status:
+                if current_chunk['status'] == status and (not split_spk or spk is None
+                                                          or current_chunk['spk'] in (None, spk)):
                     current_chunk['words'].append(w)
+                    if current_chunk['spk'] is None:
+                        current_chunk['spk'] = spk
                 else:
                     chunks.append(current_chunk)
-                    current_chunk = {'status': status, 'words': [w]}
+                    current_chunk = {'status': status, 'spk': spk, 'words': [w]}
         
         if current_chunk: chunks.append(current_chunk)
 
@@ -1362,15 +1391,10 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
                 
                 # Snap onto a silence edge in THIS gap only: never past the next word (that kept a
                 # filler followed by a pause: the cut before it jumped onto the pause after it)
-                for s in silence_blocks_for_snap:
-                    s_start_f = t2f(s['start'])
-                    s_end_f = t2f(s['end'])
-                    if lo_f <= s_start_f <= cut_f and abs(cut_f - s_start_f) <= snap_f:
-                        cut_f = s_start_f
-                        break
-                    if lo_f <= s_end_f <= cut_f and abs(cut_f - s_end_f) <= snap_f:
-                        cut_f = s_end_f
-                        break
+                k = first_silence_near(max(lo_f, cut_f - snap_f), cut_f)
+                if k is not None:
+                    s_start_f, s_end_f = _sil_f[k]
+                    cut_f = s_start_f if (lo_f <= s_start_f <= cut_f and abs(cut_f - s_start_f) <= snap_f) else s_end_f
                 
                 if cut_f < block_start_f: cut_f = block_start_f + 1
                 block_end_f = cut_f
@@ -1381,7 +1405,8 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
             ops_raw.append({
                 's': block_start_f,
                 'e': block_end_f,
-                'type': chunk['status']
+                'type': chunk['status'],
+                'spk': chunk.get('spk'),
             })
             current_time_f = block_end_f
 
@@ -1505,7 +1530,8 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         if ops_raw:
             curr = ops_raw[0]
             for next_op in ops_raw[1:]:
-                if next_op['type'] == curr['type'] and next_op['s'] <= curr['e'] + 1:
+                if next_op['type'] == curr['type'] and next_op['s'] <= curr['e'] + 1 \
+                        and next_op.get('spk') == curr.get('spk'):
                     curr['e'] = max(curr['e'], next_op['e'])
                 else:
                     merged_ops.append(curr)
@@ -1515,15 +1541,10 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         # Write exact final anchors back into EVERY source word.
         for w in processed_words:
             w_start_f = t2f(w.get('start', 0.0)) + offset_f
-            for s in silence_blocks_for_snap:
-                s_start_f = t2f(s['start'])
-                s_end_f = t2f(s['end'])
-                if abs(w_start_f - s_start_f) <= snap_f:
-                    w_start_f = s_start_f
-                    break
-                if abs(w_start_f - s_end_f) <= snap_f:
-                    w_start_f = s_end_f
-                    break
+            k = first_silence_near(w_start_f - snap_f, w_start_f + snap_f)
+            if k is not None:
+                s_start_f, s_end_f = _sil_f[k]
+                w_start_f = s_start_f if abs(w_start_f - s_start_f) <= snap_f else s_end_f
             if w_start_f < 0:
                 w_start_f = 0
             w['anchor_start'] = w_start_f / fps
@@ -1548,6 +1569,13 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         auto_cut_set = set()
         for c in auto_cut_colors:
             auto_cut_set.update(normalize_color_aliases(c))
+        if cut_speakers:
+            auto_cut_set.add(speakers_model.CUT_STATUS)
+        # "Bleep": the part stays (picture kept), its audio is muted under a tone on the new timeline
+        bleep_set = set()
+        for c in settings.get('bleep_colors', []) or []:
+            bleep_set.update(normalize_color_aliases(c))
+        bleep_set -= auto_cut_set
         # "Keep": colours whose parts stay in the edit as ordinary (uncoloured) clips
         plain_set = set()
         for c in settings.get('plain_colors', []) or []:
@@ -1576,12 +1604,15 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
             if op['e'] - op['s'] < 2:
                 continue
 
-            if op_aliases & plain_set:
+            if op_aliases & bleep_set:
+                op['bleep'] = True
+            elif op_aliases & plain_set:
                 op['plain_parts'] = [(op['type'], op['s'], op['e'])]  # remembered for the colour legend
                 op['type'] = 'normal'
 
             prev = final_result[-1] if final_result else None
             if (prev is not None and prev['type'] == 'normal' and op['type'] == 'normal' and prev['e'] == op['s']
+                    and prev.get('spk') == op.get('spk')
                     and (prev.get('plain_parts') or op.get('plain_parts'))):
                 # A "Keep" part touching ordinary speech plays on in one clip: no extra edit point
                 prev['e'] = op['e']
@@ -1600,6 +1631,68 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         """Calculates surviving timeline operations for assembly (legacy facade)."""
         ops, _ = self.calculate_timeline_structure_with_cuts(words_data, fps, settings)
         return ops
+
+    def bleep_wav(self):
+        """A 1 kHz tone (30 s, quiet), made once with FFmpeg in the temp folder; None if it can't be made."""
+        path = os.path.join(self.os_doc.get_temp_folder(), "StoryCraft bleep.wav")
+        if os.path.isfile(path) and os.path.getsize(path) > 1000:
+            return path
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            subprocess.run([getattr(self, 'ffmpeg_cmd', 'ffmpeg'), "-y", "-loglevel", "error", "-f", "lavfi",
+                            "-i", "sine=frequency=1000:sample_rate=48000:duration=30", "-af", "volume=0.3", path],
+                           check=True, timeout=60, **({"creationflags": 0x08000000} if os.name == "nt" else {}))
+            return path if os.path.isfile(path) else None
+        except Exception as e:
+            log_error(f"bleep_wav: {e}")
+            return None
+
+    def export_folder(self, settings=None):
+        """Where exports and caption files go: the user's choice, else Movies/StoryCraft Exports."""
+        f = (settings or {}).get('export_folder') or (self.load_preferences() or {}).get('export_folder')
+        return f or os.path.join(os.path.expanduser("~"), "Movies", "StoryCraft Exports")
+
+    def finishing_options(self, words_data, ops, fps, settings, tl_name):
+        """What finish_timeline does to the new timeline, from the settings. Also writes the SRT."""
+        import finishing
+        import speakers_model
+        offset = float(settings.get('offset', 0.133))
+        opts = {}
+        if int(settings.get('voice_isolation', 0) or 0) > 0:
+            opts['voice_isolation'] = int(settings['voice_isolation'])
+        if settings.get('captions_resolve'):
+            opts['captions'] = True
+        safe = "".join(c for c in str(tl_name or "StoryCraft edit") if c.isalnum() or c in " -_.()").strip() or "edit"
+        folder = self.export_folder(settings)
+        if settings.get('captions_srt'):
+            try:
+                srt = finishing.build_srt(words_data, ops, fps, offset, speakers_model.get(words_data),
+                                          names=bool(settings.get('captions_names')))
+                if srt.strip():
+                    os.makedirs(folder, exist_ok=True)
+                    path = os.path.join(folder, safe + ".srt")
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(srt)
+                    opts['srt_path'] = path
+            except Exception as e:
+                log_error(f"finishing_options: SRT failed: {e}")
+        bleeps = finishing.bleep_ranges(ops, fps)
+        if bleeps:
+            opts['bleeps'] = bleeps
+            opts['bleep_wav'] = self.bleep_wav()
+        mode = settings.get('camera_mode')
+        if mode == 'speaker':
+            cmap = {s["id"]: int(s.get("camera") or s["id"]) for s in speakers_model.get(words_data)}
+            if cmap:
+                opts['cameras'] = {"mode": "speaker", "map": cmap,
+                                   "ranges": finishing.speaker_ranges(words_data, ops, fps, offset)}
+        elif mode == 'smartswitch':
+            opts['cameras'] = {"mode": "smartswitch"}
+        ext = {"fcp7": ".xml", "fcpxml": ".fcpxmld", "otio": ".otio", "edl": ".edl", "aaf": ".aaf"}
+        exports = [(os.path.join(folder, safe + ext[k]), k) for k in settings.get('export_formats', []) or [] if k in ext]
+        if exports:
+            opts['exports'] = exports
+        return opts
 
     def apply_story(self, ops, settings, fps):
         """Story mode (issue #8): keep only the clips of an imported AI edit, in its order.
@@ -2047,6 +2140,9 @@ except Exception as e:
         try:
             set_status(self.txt("status_assembly_init"))
             set_progress(-1)
+            self.last_finish = {}
+            if settings.get('camera_mode') == 'speaker':
+                settings['split_at_speakers'] = True
 
             source_snapshot   = settings.get("source_snapshot") or {}
             source_file       = source_snapshot.get("source_file") or settings.get("source_file")
@@ -2433,6 +2529,14 @@ except Exception as e:
                             mark_jumps=bool(settings.get('mark_jump_cuts', True)), sound_marks=sound_marks)
                     except Exception as pol_err:
                         log_error(f"assemble_timeline: polish skipped: {pol_err}")
+                    try:
+                        fin = self.finishing_options(words_data, clean_ops, fps, settings, new_tl_name)
+                        if fin:
+                            set_status(self.txt("status_finishing_timeline"))
+                            self.last_finish = self.resolve_handler.finish_timeline(fin)
+                            self.last_finish.update({k: v for k, v in fin.items() if k in ("srt_path",)})
+                    except Exception as fin_err:
+                        log_error(f"assemble_timeline: finishing skipped: {fin_err}")
                 if self.resolve_handler and self.resolve_handler.resolve:
                     self.resolve_handler.resolve.OpenPage("edit")
             except Exception as nav_err:

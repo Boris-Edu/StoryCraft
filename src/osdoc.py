@@ -18,6 +18,7 @@ import shutil
 import logging
 import subprocess
 import tempfile
+import time
 import uuid
 import json
 import hashlib
@@ -798,6 +799,13 @@ class OSDoctor:
                     except Exception as e:
                         log_warn(f"Failed to read Info.plist: {e}")
 
+            # The bundle can't tell Studio from Free: fall back to what a live Resolve reported
+            # for this same installed version (see record_live_resolve_edition).
+            if info["edition"] == "Unknown":
+                seen = (getattr(self, "settings", None) or {}).get("resolve_edition_seen") or {}
+                if seen.get("edition") in ("Studio", "Free") and seen.get("version") == info["version"]:
+                    info["edition"] = seen["edition"]
+
         elif self.is_linux:
             resolve_bin = "/opt/resolve/bin/resolve"
             if os.path.isfile(resolve_bin):
@@ -1096,11 +1104,29 @@ else:
     print("CRITICAL: script not found at", MAIN_SCRIPT)
 '''
 
+    def record_live_resolve_edition(self, product_name: str) -> None:
+        """Remembers the edition a running Resolve reports (GetProductName) when the install
+        alone can't tell (macOS: Studio and Free ship the same bundle). Keyed on the installed
+        version, so an upgrade or reinstall is detected afresh. Re-syncs the menu scripts on change."""
+        if not product_name:
+            return
+        self._resolve_installation_info = None
+        info = self.get_resolve_installation_info()
+        edition = "Studio" if "studio" in product_name.lower() else "Free"
+        if info.get("edition") == edition:
+            return
+        if not self.is_mac:  # elsewhere the install check is authoritative
+            return
+        self.set_pref("resolve_edition_seen", {"edition": edition, "version": info.get("version", "")})
+        self._resolve_installation_info = None
+        log_info(f"[Resolve Sync] Live Resolve reports {edition}; updating Scripts menu entries")
+        self.sync_resolve_scripts()
+
     def sync_resolve_scripts(self, force: bool = False) -> None:
         """
         Auto-healing: ensures the correct scripts are installed in DaVinci Resolve.
-        - StoryCraft.py: ALWAYS installed in Workspace -> Scripts so user can launch BadWords embedded.
-        - StoryCraft Bridge.lua: ALWAYS installed for Free edition (and also available for Studio bridge).
+        - StoryCraft.py: installed in ONE Scripts/Utility folder (Resolve merges them all into one menu).
+        - StoryCraft Bridge.lua: installed for Free/Unknown editions only; removed on Studio.
         """
         try:
             info = self.get_resolve_installation_info()
@@ -1133,7 +1159,14 @@ else:
                     try: os.makedirs(ud, exist_ok=True)
                     except Exception: continue
                 py_file = os.path.join(ud, "StoryCraft.py")
-                if not py_deployed:
+                if py_deployed:
+                    # Secondary directory: Resolve merges all script folders into one menu
+                    if os.path.isfile(py_file):
+                        try:
+                            os.remove(py_file)
+                            log_info(f"[Resolve Sync] Removed duplicate StoryCraft.py from secondary dir: {py_file}")
+                        except Exception: pass
+                else:
                     try:
                         existing_content = ""
                         if os.path.isfile(py_file):
@@ -1152,7 +1185,17 @@ else:
                     except Exception as e:
                         log_warn(f"[Resolve Sync] Could not write StoryCraft.py to {ud}: {e}")
 
-            # 2. StoryCraft Bridge.lua handling
+            # 2. StoryCraft Bridge.lua: Studio has native external scripting, so no Bridge there
+            if is_studio:
+                for ud in util_dirs:
+                    lua_file = os.path.join(ud, "StoryCraft Bridge.lua")
+                    if os.path.isfile(lua_file):
+                        try:
+                            os.remove(lua_file)
+                            log_info(f"[Resolve Sync] Removed StoryCraft Bridge.lua (not needed on Studio): {lua_file}")
+                        except Exception: pass
+                return
+
             primary_installed = False
             for ud in util_dirs:
                 if not os.path.isdir(ud):
@@ -1166,7 +1209,7 @@ else:
                             with open(lua_src, "r", encoding="utf-8") as lf:
                                 l_code = lf.read()
                             clean_inst = self.install_dir.replace('\\', '/')
-                            l_code = l_code.replace("__BADWORDS_INSTALL_DIR__", clean_inst)
+                            l_code = l_code.replace("__STORYCRAFT_INSTALL_DIR__", clean_inst)
 
                             # Ensure bridge folder inside BadWords install directory exists
                             bridge_dir = os.path.join(self.install_dir, "bridge")

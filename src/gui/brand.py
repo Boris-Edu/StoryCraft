@@ -99,6 +99,8 @@ _S_SEGMENTS = ((344, 148), (322, 116, 288, 102, 252, 102), (198, 102, 164, 134, 
                (348, 382, 312, 410, 260, 410), (218, 410, 186, 394, 166, 362))
 _BARS = ((190, 210, 150, False), (128, 246, 196, True), (204, 282, 150, False))  # x, y, width, hot
 _CYCLE = 2.6  # seconds: trace 1.4, hold 0.8, fade 0.4
+_TRACE = 1.4    # the S is fully traced
+_FADE_AT = 2.2  # it starts fading out
 
 
 def _s_path():
@@ -116,8 +118,8 @@ def draw_mark_animated(painter, rect, t):
     import math
     phase = t % _CYCLE
     ease = lambda x: 0.5 - 0.5 * math.cos(math.pi * min(1.0, max(0.0, x)))
-    progress = ease(phase / 1.4)
-    bright = 1.0 if phase < 2.2 else 1.0 - (phase - 2.2) / 0.4
+    progress = ease(phase / _TRACE)
+    bright = 1.0 if phase < _FADE_AT else 1.0 - (phase - _FADE_AT) / (_CYCLE - _FADE_AT)
     head_x = 150 + 196 * (0.5 - 0.5 * math.cos(2 * math.pi * t / _CYCLE))
 
     painter.save()
@@ -210,5 +212,17 @@ def animated_mark_widget(size, parent=None):
             p = QPainter(self)
             draw_mark_animated(p, QRectF(0, 0, self.width(), self.height()), time.monotonic() - self._t0)
             p.end()
+
+        def seconds_until_traced(self):
+            """Time left until the S is fully traced (0 while it is held traced; the next trace
+            when it is fading out). Lets a screen wait for the animation instead of cutting it."""
+            if not self.isVisible():
+                return 0.0
+            phase = (time.monotonic() - self._t0) % _CYCLE
+            if phase < _TRACE:
+                return _TRACE - phase
+            if phase <= _FADE_AT:
+                return 0.0
+            return _CYCLE - phase + _TRACE
 
     return AnimatedMark()
