@@ -198,4 +198,33 @@
     }
     setTimeout(() => { btn.textContent = "Copy"; }, 1600);
   }));
+
+  // ── Comparison table: details of a mark on hover, keyboard focus or tap ──
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  tip.setAttribute("role", "tooltip");
+  document.body.appendChild(tip);
+  let tipFor = null;
+  const showTip = (el) => {
+    tipFor = el;
+    tip.textContent = el.dataset.tip;
+    tip.classList.add("show");
+    const r = el.getBoundingClientRect();
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    const x = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), window.innerWidth - w - 8);
+    const y = r.top - h - 8 < 8 ? r.bottom + 8 : r.top - h - 8;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  };
+  const hideTip = () => { tipFor = null; tip.classList.remove("show"); };
+  document.querySelectorAll(".compare-table [data-tip]").forEach((el) => {
+    el.addEventListener("mouseenter", () => showTip(el));
+    el.addEventListener("mouseleave", hideTip);
+    el.addEventListener("focus", () => showTip(el));
+    el.addEventListener("blur", hideTip);
+    el.addEventListener("click", (e) => { e.stopPropagation(); tipFor === el ? hideTip() : showTip(el); });
+  });
+  document.addEventListener("click", hideTip);
+  window.addEventListener("scroll", hideTip, { passive: true });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
 })();

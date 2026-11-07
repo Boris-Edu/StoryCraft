@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What's new · StoryCraft</title>
+<meta name="description" content="Every StoryCraft release and what it added, from the first fixes to BadWords to speakers, captions and cameras by speaker.">
+<meta name="theme-color" content="#0b0b14">
+<meta property="og:title" content="What's new in StoryCraft">
+<meta property="og:description" content="Every StoryCraft release and what it added.">
+<meta property="og:image" content="assets/brand/icon-512.png">
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/brand/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css?v=13">
+</head>
+<body>
+
+<header class="nav">
+  <a class="nav-brand" href="index.html" aria-label="StoryCraft home"><img src="assets/brand/storycraft-wordmark.svg" alt="StoryCraft" height="26"></a>
+  <nav class="nav-links" aria-label="Sections">
+    <a href="index.html#how">How it works</a>
+    <a href="index.html#features">Features</a>
+    <a href="index.html#compare">Compare</a>
+    <a href="index.html#install">Install</a>
+    <a href="timeline.html" aria-current="page">What's new</a>
+  </nav>
+  <a class="btn btn-small" href="https://github.com/Boris-Edu/StoryCraft/releases">Releases</a>
+</header>
+
+<main id="top">
+
+<section class="rel-hero wrap">
+  <svg class="rel-mark" data-mark width="72" height="72" viewBox="0 0 512 512" aria-hidden="true"><image href="assets/brand/storycraft-mark.svg" width="512" height="512"/></svg>
+  <p class="eyebrow">What's new</p>
+  <h1>Every release, <span class="grad">in order.</span></h1>
+  <p class="lede">StoryCraft started as a fork of BadWords by Szymon Wolarz. This is what was added since, newest first. To update, run the installer again or use StoryCraft Setup: your transcripts and stories are kept.</p>
+</section>
+
+<section class="wrap">
+  <ol class="rel">
+
+    <li class="rel-item rel-latest">
+      <div class="rel-when"><time datetime="2026-11-07">7 Nov 2026</time><span class="rel-ver">v4.1.0</span></div>
+      <div class="rel-body">
+        <h2>Speakers, finishing touches and an edit you can read</h2>
+        <h3>Who's talking</h3>
+        <ul>
+          <li><b>Up to 10 speakers</b>, told apart on your computer right after the transcription. Choose how many on the start screen, or leave it on Auto.</li>
+          <li>Every turn in the transcript starts with the speaker's name. Click a name to give the turn to someone else, select a few words to move just those, or <b>reassign everything</b> a voice said. A sentence two people share is split in two.</li>
+          <li>Each speaker gets a role (main, interviewer, other) and a <b>Leave out</b> switch that cuts everything they say from the edit.</li>
+          <li>Copy for AI names who says each moment, and <b>Copy for AI</b> and <b>Import AI edit</b> now sit together as External AI.</li>
+        </ul>
+        <h3>Finishing in Resolve</h3>
+        <ul>
+          <li><b>Clean up speech:</b> Resolve's Voice Isolation on the dialogue, at the strength you choose.</li>
+          <li><b>Captions:</b> an SRT file of the edit, or subtitles straight in Resolve, with names when the speaker changes.</li>
+          <li><b>Cameras:</b> each turn shows its speaker's camera, or Resolve Studio's SmartSwitch picks the angle of a multicam clip.</li>
+          <li><b>Swear words:</b> marked after transcription, then kept, cut or bleeped while the picture stays.</li>
+          <li><b>Copies for other editors:</b> Premiere (XML), Final Cut (FCPXML), OpenTimelineIO, EDL and AAF, saved next to each other.</li>
+        </ul>
+        <h3>Building the story</h3>
+        <ul>
+          <li><b>Start from a script:</b> paste a script or an outline and the story board follows it; when a line was said twice, the later take wins.</li>
+          <li><b>Every edit kept:</b> each edit of an interview is listed by date or length and reloads with its marks, speakers and story. The source timeline is backed up first.</li>
+          <li><b>Edited view:</b> the transcript can show only what the edit keeps, in story order, and the playhead stays on kept words.</li>
+          <li><b>Resolve keeps up:</b> Send to Resolve shows when Resolve's timeline is behind. Keep Resolve in sync rebuilds it a few seconds after each change, and pauses if you edited it by hand.</li>
+          <li><b>Faster playback:</b> up to 3×, with the voice at its normal pitch (keys &lt; and &gt;).</li>
+        </ul>
+        <h3>Smoother</h3>
+        <ul>
+          <li>An edit timeline StoryCraft made opens by itself when StoryCraft starts on it, instead of asking to transcribe again.</li>
+          <li>Opening an hour-long project no longer freezes the window for about eight seconds, and the loading animation plays through.</li>
+          <li>Clean up no longer opens a panel in a separate window, and Resolve's Scripts menu lists StoryCraft once.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item">
+      <div class="rel-when"><time datetime="2026-11-02">2 Nov 2026</time><span class="rel-ver">v4.0.1</span></div>
+      <div class="rel-body">
+        <h2>StoryCraft Setup</h2>
+        <ul>
+          <li><b>A setup app</b> for macOS, Windows and Linux, for people who'd rather not use a terminal: install, update, repair, reset or uninstall, step by step.</li>
+          <li>Optional, anonymous usage stats for BadWords' author, asked once and off unless you agree.</li>
+          <li>Linux installs work without <code>python3-venv</code> or <code>update-desktop-database</code>.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item">
+      <div class="rel-when"><time datetime="2026-11-02">2 Nov 2026</time><span class="rel-ver">v4.0.0</span></div>
+      <div class="rel-body">
+        <h2>First public release</h2>
+        <ul>
+          <li>One installer command for macOS, Windows and Linux, installed next to BadWords without touching it.</li>
+          <li>This website.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item">
+      <div class="rel-when"><time datetime="2026-11-01">1 Nov 2026</time></div>
+      <div class="rel-body">
+        <h2>StoryCraft: a new name and a new way to edit</h2>
+        <ul>
+          <li><b>New interface:</b> the transcript as a document, one tabbed inspector, a floating player and a step bar: Clean up, Compose, Send to Resolve.</li>
+          <li><b>Story board:</b> the interview as blocks you drag into any order, with a target length and a clarity score on each block.</li>
+          <li><b>Play edit:</b> watch the edit inside StoryCraft, with a smooth preview rendered in the background.</li>
+          <li><b>What the AI found:</b> fillers, repeated words, restarts, retakes and sounds without words, each with its count, a switch and Restore.</li>
+          <li><b>Sounds without words:</b> coughs and knocks are measured against the voice; the loud ones are cut and you listen to the rest.</li>
+          <li><b>AI edits that flow:</b> the transcript for the AI is grouped into whole thoughts, and an imported edit is checked for clips that start mid-thought or are too short.</li>
+          <li><b>Claude directly:</b> Claude can read the transcript and build the story in the open window.</li>
+          <li>Marking in the transcript with keys 1–9, an Avoid marker, transcribe a passage again, saved transcripts that reopen by themselves, light and dark themes.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item">
+      <div class="rel-when"><time datetime="2026-10-31">31 Oct 2026</time></div>
+      <div class="rel-body">
+        <h2>The AI story round trip</h2>
+        <ul>
+          <li><b>Copy for AI and Import AI edit:</b> give any chat AI a transcript with numbered sentences, paste its edit back, and the timeline follows the AI's order.</li>
+          <li><b>Live pause tuning:</b> remove a share of the pause time, longest first, with a minimum clip length so the edit doesn't jump.</li>
+          <li><b>Colours in this edit:</b> what each colour means and how much it removes, with a switch per colour.</li>
+          <li>Cuts shown in the transcript: removed words struck through, a mark where a pause goes.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item">
+      <div class="rel-when"><time datetime="2026-10-30">30 Oct 2026</time></div>
+      <div class="rel-body">
+        <h2>Faster on Mac, and the first fixes</h2>
+        <ul>
+          <li><b>Transcription on the Apple Silicon GPU:</b> about 11× faster than before, with the same timings.</li>
+          <li>Fixes for PyAV 19, Esc on the "Cut clips" dialog, Resolve Studio detected as the free version, and unclear model download errors.</li>
+          <li>These fixes, the GPU transcription, pause tuning, the colours legend and cuts in the transcript were offered back to BadWords and are now part of it. The AI round trip was offered too.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item rel-origin">
+      <div class="rel-when"><span class="rel-ver">Before</span></div>
+      <div class="rel-body">
+        <h2>BadWords by Szymon Wolarz</h2>
+        <p>StoryCraft is built on <a href="https://github.com/veritus-git/BadWords">BadWords</a>, the text-based rough-cutting plugin for DaVinci Resolve, released under the MIT licence. Its transcription, cutting and Resolve assembly are the foundation everything above is built on.</p>
+      </div>
+    </li>
+
+  </ol>
+</section>
+
+</main>
+
+<footer class="footer wrap">
+  <img src="assets/brand/storycraft-glyph.svg" alt="" width="28" height="28">
+  <p>StoryCraft · <a href="https://github.com/Boris-Edu/StoryCraft">GitHub</a> · <a href="mailto:boris@dessimond.com">Contact</a> · <a href="https://github.com/Boris-Edu/StoryCraft/blob/fork/LICENSE">MIT licence</a></p>
+  <p class="fine">Not affiliated with Blackmagic Design or with the BadWords project. DaVinci Resolve is a trademark of Blackmagic Design.</p>
+</footer>
+
+<script src="mark.js?v=1"></script>
+</body>
+</html>
