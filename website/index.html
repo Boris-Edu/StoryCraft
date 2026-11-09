@@ -12,7 +12,7 @@
 <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/brand/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=13">
+<link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
 
@@ -37,7 +37,7 @@
 <section class="hero">
   <div class="hero-glow" aria-hidden="true"></div>
   <svg class="hero-mark" data-mark width="104" height="104" viewBox="0 0 512 512" aria-hidden="true"><image href="assets/brand/storycraft-mark.svg" width="512" height="512"/></svg>
-  <a class="new-pill" href="timeline.html"><b>New in 4.1</b> Up to 10 speakers, captions, cameras by speaker, Resolve kept in sync →</a>
+  <a class="new-pill" href="timeline.html#v4-2-0"><b>New in 4.2</b> One story everywhere, voice patches, versions, Reload from Resolve →</a>
   <p class="eyebrow">For DaVinci Resolve · Free and open source</p>
   <h1>Your interview,<br><span class="grad">already a story.</span></h1>
   <p class="lede">StoryCraft turns unscripted footage into text, cleans out what you'd cut anyway, and helps you (or your AI) arrange the moments that matter. Then it hands Resolve a finished timeline.</p>
@@ -74,17 +74,17 @@
       </button></li>
       <li><button class="step" role="tab" data-step="1" aria-selected="false">
         <span class="step-num">2</span>
-        <span class="step-text"><b>Clean up</b><span>Fillers, stutters, self-corrections, echoes and loud coughs are found and cut. You review what the AI found and keep what you like.</span></span>
+        <span class="step-text"><b>Clean up</b><span>Fillers, stutters, self-corrections, echoes and loud coughs are found and cut, right in the story's sentences. You review what was found and keep what you like.</span></span>
         <span class="step-progress" aria-hidden="true"></span>
       </button></li>
       <li><button class="step" role="tab" data-step="2" aria-selected="false">
         <span class="step-num">3</span>
-        <span class="step-text"><b>Compose with AI</b><span>Ask for a two-minute story, or follow your script. The AI picks the moments, StoryCraft checks the edit flows, and the blocks land on your story board.</span></span>
+        <span class="step-text"><b>Compose with AI</b><span>Ask for a two-minute story, or follow your script. The AI picks the moments, StoryCraft checks the edit flows, and the blocks land in your story, ready to drag, split or trim.</span></span>
         <span class="step-progress" aria-hidden="true"></span>
       </button></li>
       <li><button class="step" role="tab" data-step="3" aria-selected="false">
         <span class="step-num">4</span>
-        <span class="step-text"><b>Send to Resolve</b><span>Play the edit first. Then a new timeline appears in a StoryCraft bin, with crossfades, captions and cameras that follow the speaker. Your source stays untouched.</span></span>
+        <span class="step-text"><b>Send to Resolve</b><span>Play the story first, every cut and voice patch in. Then a new timeline appears in a StoryCraft bin, with crossfades, captions and cameras that follow the speaker. Your source stays untouched.</span></span>
         <span class="step-progress" aria-hidden="true"></span>
       </button></li>
     </ol>
@@ -139,11 +139,11 @@
             <p class="tool" data-at="1000"><span class="tick ok"></span><code>get_transcript</code> 38 moments</p>
             <p class="tool" data-at="1700"><span class="tick warn"></span><code>check_edit</code> 2:31 · clips 3 and 5 make the same point</p>
             <p class="tool" data-at="2600"><span class="tick ok"></span><code>check_edit</code> 1:58 · the edit flows</p>
-            <p class="tool" data-at="3200"><span class="tick ok"></span><code>apply_edit</code> on the story board</p>
+            <p class="tool" data-at="3200"><span class="tick ok"></span><code>apply_edit</code> in the story</p>
             <p class="bubble reply" data-at="3700">Opens in the garage, the first bike, what changed, the kids, and ends on why it matters.</p>
           </div>
           <div class="board" data-at="2600" data-cls="sorted-meter">
-            <div class="board-head"><span>Story board</span><span class="target">Target 2:00 · <b><span class="t-a" data-at="1700" data-cls="hide">—</span><span data-at="2600" data-cls="hide"><span class="t-b" data-at="1700">2:31</span></span><span class="t-c" data-at="2600">1:58</span></b></span></div>
+            <div class="board-head"><span>Story</span><span class="target">Target 2:00 · <b><span class="t-a" data-at="1700" data-cls="hide">—</span><span data-at="2600" data-cls="hide"><span class="t-b" data-at="1700">2:31</span></span><span class="t-c" data-at="2600">1:58</span></b></span></div>
             <div class="meter"><span data-at="1700" data-cls="over"></span></div>
             <div class="blocks">
               <div class="block" style="--from:0;--to:0" data-at="2600" data-cls="sorted"><i style="--c:#22d3ee"></i>The garage<em>0:14</em></div>
@@ -205,9 +205,11 @@
   </div>
   <div class="screens-bar">
     <div class="tabs screens-tabs" role="tablist" aria-label="Screens">
-      <button class="tab" role="tab" aria-selected="true" data-shot="clean-up">Clean up</button>
-      <button class="tab" role="tab" aria-selected="false" data-shot="story-board">Story board</button>
-      <button class="tab" role="tab" aria-selected="false" data-shot="start">Start</button>
+      <button class="tab" role="tab" aria-selected="true" data-shot="story-board">Story</button>
+      <button class="tab" role="tab" aria-selected="false" data-shot="clean-up">Clean</button>
+      <button class="tab" role="tab" aria-selected="false" data-shot="voice-patch">Voice patch</button>
+      <button class="tab" role="tab" aria-selected="false" data-shot="review-cuts">Review cuts</button>
+      <button class="tab" role="tab" aria-selected="false" data-shot="start">Home</button>
       <button class="tab" role="tab" aria-selected="false" data-shot="settings">Settings</button>
     </div>
     <div class="tabs mode-tabs" role="group" aria-label="Theme">
@@ -217,9 +219,9 @@
   </div>
   <figure class="shot">
     <button class="shot-open" type="button" aria-label="Open the screenshot full size">
-      <img id="shot-img" src="assets/shots/clean-up.jpg?v=2" width="1920" height="1080" alt="StoryCraft cleaning up a transcript: fillers and repeats marked, a loud sound cut, the inspector showing what the AI found" loading="lazy">
+      <img id="shot-img" src="assets/shots/story-board.jpg?v=4" width="1920" height="1080" alt="The StoryCraft Story page: six blocks of an invented bakery interview in story order, Available on the right, the story timeline with a cyan voice patch below" loading="lazy">
     </button>
-    <figcaption id="shot-caption">Clean up: fillers, repeats and a loud cough found and marked; the inspector shows what the AI found and what each colour does in Resolve.</figcaption>
+    <figcaption id="shot-caption">Story: the blocks in story order, out of recording order, with the target length; what was left out waits in Available. The timeline below shows the story, a voice patch in cyan.</figcaption>
   </figure>
 </section>
 <dialog class="lightbox" id="lightbox" aria-label="Screenshot">
@@ -243,28 +245,36 @@
       <p>Every cough, knock or background voice is measured against the speaker. The loud ones go; you listen to the rest and keep or cut each one.</p>
     </article>
     <article class="card">
-      <h3>A story board, not a timeline</h3>
-      <p>The transcript as blocks you drag into any order, with a target length and a clarity score on each one, so you build the story by meaning.</p>
+      <h3>One story, on every page</h3>
+      <p>Blocks you drag, split and trim, with a target length and a clarity score. Every page plays the story the way Resolve will get it, with one playhead and one clock. Play original when you want the raw recording.</p>
+    </article>
+    <article class="card">
+      <h3>Fix a sentence in the speaker's voice</h3>
+      <p>Voice patch, with VoiceStudio on your computer: three synthetic takes side by side, each word placed where the original one started, blended in with short crossfades. Only with the speaker's permission.</p>
+    </article>
+    <article class="card">
+      <h3>Hear every cut, A and B</h3>
+      <p>Review cuts plays each join as recorded and as the story plays it, up to 3× faster with the voice at its normal pitch. Tick the ones that sound good; Resolve only gets a timeline when you're happy.</p>
+    </article>
+    <article class="card">
+      <h3>Versions of the story</h3>
+      <p>Keep the story as a named version, compare any version with the story now and restore it. Start fresh with a timeline at any time: the earlier work goes to an archive.</p>
     </article>
     <article class="card">
       <h3>Cuts that sound natural</h3>
       <p>Cut points land on the quietest moment, never inside a word, and never one word before a sentence ends. Pauses stay even.</p>
     </article>
     <article class="card">
-      <h3>Watch before you send</h3>
-      <p>Play the edit, cuts and all, inside StoryCraft, up to 3× faster with the voice at its normal pitch. Resolve only gets a timeline when you're happy with it.</p>
-    </article>
-    <article class="card">
       <h3>Ready for the edit bay</h3>
       <p>A new timeline in a StoryCraft bin, with crossfades on every join and markers where the picture jumps or a sound needs a listen.</p>
     </article>
     <article class="card">
-      <h3>Knows who's talking</h3>
-      <p>Up to 10 voices told apart on your computer, even when someone cuts in mid-sentence. Every turn in the transcript starts with the speaker's name.</p>
+      <h3>Resolve keeps up, both ways</h3>
+      <p>Keep Resolve in sync rebuilds the timeline a few seconds after each change. Edited it by hand in Resolve? Reload from Resolve brings it back as a version you can compare.</p>
     </article>
     <article class="card">
-      <h3>Fix a speaker in one click</h3>
-      <p>Click a name to give the turn to someone else, select a few words to move just those, or reassign everything a voice said. Cmd+Z undoes it.</p>
+      <h3>Knows who's talking</h3>
+      <p>Up to 10 voices told apart on your computer, even when someone cuts in mid-sentence. Click a name to give a turn to someone else, or reassign everything a voice said.</p>
     </article>
     <article class="card">
       <h3>Leave the interviewer out</h3>
@@ -281,14 +291,6 @@
     <article class="card">
       <h3>Every edit kept, opens anywhere</h3>
       <p>Each edit of an interview is listed by date or length, ready to reload, and reopens by itself when Resolve starts on it. Copies go to Premiere, Final Cut or OTIO, and the source timeline is backed up.</p>
-    </article>
-    <article class="card">
-      <h3>Read the edit, not the recording</h3>
-      <p>Switch the transcript to Edited and it shows only what the edit keeps, in story order. It follows every block you move, and the playhead never lands on a cut word.</p>
-    </article>
-    <article class="card">
-      <h3>Resolve keeps up</h3>
-      <p>Send to Resolve tells you when Resolve's timeline is behind your edit. Turn on Keep Resolve in sync and it is rebuilt a few seconds after each change, unless you've edited it by hand.</p>
     </article>
     <article class="card">
       <h3>Start from a script</h3>
@@ -344,7 +346,7 @@
         <tr><th scope="col">Tool</th><th scope="col">Cost</th><th scope="col">In Resolve</th><th scope="col">Cuts fillers</th><th scope="col">Speakers</th><th scope="col">Captions</th><th scope="col">Cameras</th><th scope="col">AI story</th></tr>
       </thead>
       <tbody>
-        <tr class="us"><th scope="row">StoryCraft</th><td><span class="cost" tabindex="0" aria-label="Free: Free and open source (MIT)." data-tip="Free and open source (MIT).">Free</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Works beside Resolve and sends a new Resolve timeline; also copies for Premiere, Final Cut and OTIO." data-tip="Works beside Resolve and sends a new Resolve timeline; also copies for Premiere, Final Cut and OTIO.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Fillers, stutters, restarts, repeats and loud sounds; swear words bleeped or cut." data-tip="Fillers, stutters, restarts, repeats and loud sounds; swear words bleeped or cut.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Up to 10 voices, told apart on your computer; fix any turn in a click." data-tip="Up to 10 voices, told apart on your computer; fix any turn in a click.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: An SRT file of the edit, or subtitles made in Resolve (Studio)." data-tip="An SRT file of the edit, or subtitles made in Resolve (Studio).">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Each turn shows its speaker&#x27;s camera, or Resolve Studio&#x27;s SmartSwitch picks the angle." data-tip="Each turn shows its speaker&#x27;s camera, or Resolve Studio&#x27;s SmartSwitch picks the angle.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Any chat AI, Claude directly, or your script; the edit is checked for flow and length." data-tip="Any chat AI, Claude directly, or your script; the edit is checked for flow and length.">✓</span></td></tr>
+        <tr class="us"><th scope="row">StoryCraft</th><td><span class="cost" tabindex="0" aria-label="Free: Free and open source (MIT)." data-tip="Free and open source (MIT).">Free</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Works beside Resolve, sends a new Resolve timeline and brings your hand edits back; also copies for Premiere, Final Cut and OTIO." data-tip="Works beside Resolve, sends a new Resolve timeline and brings your hand edits back; also copies for Premiere, Final Cut and OTIO.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Fillers, stutters, restarts, repeats and loud sounds; swear words bleeped or cut." data-tip="Fillers, stutters, restarts, repeats and loud sounds; swear words bleeped or cut.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Up to 10 voices, told apart on your computer; fix any turn in a click." data-tip="Up to 10 voices, told apart on your computer; fix any turn in a click.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: An SRT file of the edit, or subtitles made in Resolve (Studio)." data-tip="An SRT file of the edit, or subtitles made in Resolve (Studio).">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Each turn shows its speaker&#x27;s camera, or Resolve Studio&#x27;s SmartSwitch picks the angle." data-tip="Each turn shows its speaker&#x27;s camera, or Resolve Studio&#x27;s SmartSwitch picks the angle.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Any chat AI, Claude directly, or your script; the edit is checked for flow and length." data-tip="Any chat AI, Claude directly, or your script; the edit is checked for flow and length.">✓</span></td></tr>
         <tr><th scope="row">DaVinci Resolve Studio 21</th><td><span class="cost" tabindex="0" aria-label="Free / $295: Free version; Studio is $295 once, and most AI tools need Studio." data-tip="Free version; Studio is $295 once, and most AI tools need Studio.">Free / $295</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: It is Resolve." data-tip="It is Resolve.">✓</span></td><td><span class="mk mk-p" tabindex="0" role="img" aria-label="Partly: Text-based editing; no one-click filler cut found." data-tip="Text-based editing; no one-click filler cut found.">◐</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: In Studio&#x27;s transcription." data-tip="In Studio&#x27;s transcription.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Subtitles from audio (Studio)." data-tip="Subtitles from audio (Studio).">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: SmartSwitch, for multicam clips (Studio)." data-tip="SmartSwitch, for multicam clips (Studio).">✓</span></td><td><span class="mk mk-p" tabindex="0" role="img" aria-label="Partly: IntelliScript builds from a written script; AI assistants can connect since 21.1." data-tip="IntelliScript builds from a written script; AI assistants can connect since 21.1.">◐</span></td></tr>
         <tr><th scope="row">Adobe Premiere Pro</th><td><span class="cost" tabindex="0" aria-label="Subscription: Creative Cloud subscription." data-tip="Creative Cloud subscription.">Subscription</span></td><td><span class="mk mk-n" tabindex="0" role="img" aria-label="No: A separate editor." data-tip="A separate editor.">—</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Filler words, in text-based editing." data-tip="Filler words, in text-based editing.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Speaker labels in the transcript." data-tip="Speaker labels in the transcript.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Captions from Speech to Text." data-tip="Captions from Speech to Text.">✓</span></td><td><span class="mk mk-p" tabindex="0" role="img" aria-label="Partly: Multicam is manual; automatic switching needs a plugin." data-tip="Multicam is manual; automatic switching needs a plugin.">◐</span></td><td><span class="mk mk-u" tabindex="0" role="img" aria-label="Not confirmed: Not confirmed from public information." data-tip="Not confirmed from public information.">?</span></td></tr>
         <tr><th scope="row">Descript</th><td><span class="cost" tabindex="0" aria-label="Subscription: Subscription with AI credits; a limited free plan." data-tip="Subscription with AI credits; a limited free plan.">Subscription</span></td><td><span class="mk mk-n" tabindex="0" role="img" aria-label="No: Its own editor." data-tip="Its own editor.">—</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Filler word removal." data-tip="Filler word removal.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Speaker detection." data-tip="Speaker detection.">✓</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: SRT and VTT subtitle files." data-tip="SRT and VTT subtitle files.">✓</span></td><td><span class="mk mk-u" tabindex="0" role="img" aria-label="Not confirmed: Not confirmed from public information." data-tip="Not confirmed from public information.">?</span></td><td><span class="mk mk-y" tabindex="0" role="img" aria-label="Yes: Rough cuts with Underlord." data-tip="Rough cuts with Underlord.">✓</span></td></tr>
@@ -466,10 +468,10 @@
 <footer class="footer wrap">
   <img src="assets/brand/storycraft-glyph.svg" alt="" width="28" height="28">
   <p>StoryCraft · <a href="https://github.com/Boris-Edu/StoryCraft">GitHub</a> · <a href="mailto:boris@dessimond.com">Contact</a> · <a href="https://github.com/Boris-Edu/StoryCraft/blob/fork/LICENSE">MIT licence</a></p>
-  <p class="fine">Not affiliated with Blackmagic Design or with the BadWords project. DaVinci Resolve is a trademark of Blackmagic Design. The interview in the animation is an invented example.</p>
+  <p class="fine">Not affiliated with Blackmagic Design or with the BadWords project. DaVinci Resolve is a trademark of Blackmagic Design. The interviews in the animation and the screenshots are invented examples.</p>
 </footer>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 <script src="mark.js?v=1"></script>
 </body>
 </html>

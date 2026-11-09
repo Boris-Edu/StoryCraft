@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>What's new · StoryCraft</title>
-<meta name="description" content="Every StoryCraft release and what it added, from the first fixes to BadWords to speakers, captions and cameras by speaker.">
+<meta name="description" content="Every StoryCraft release and what it added, from the first fixes to BadWords to speakers, voice patches and story versions.">
 <meta name="theme-color" content="#0b0b14">
 <meta property="og:title" content="What's new in StoryCraft">
 <meta property="og:description" content="Every StoryCraft release and what it added.">
@@ -12,7 +12,7 @@
 <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/brand/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=13">
+<link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
 
@@ -40,7 +40,50 @@
 <section class="wrap">
   <ol class="rel">
 
-    <li class="rel-item rel-latest">
+    <li class="rel-item rel-latest" id="v4-2-0">
+      <div class="rel-when"><time datetime="2026-11-09">9 Nov 2026</time><span class="rel-ver">v4.2.0</span></div>
+      <div class="rel-body">
+        <h2>One story everywhere, voice patches and versions</h2>
+        <h3>One story, one timeline</h3>
+        <ul>
+          <li><b>Everything plays the story</b> the way Resolve will get it: blocks in order, cuts skipped, voice patches in. The "Play story" switch is gone.</li>
+          <li>The timeline shows the story: blocks end to end, voice patches in cyan, one playhead and one clock ("1:12 / 2:25") on every page.</li>
+          <li><b>Clean works on the story:</b> its transcript shows the story's sentences in story order, and the parts you left out are folded away, ready to bring back.</li>
+          <li><b>Play original</b> in the player plays the raw recording behind a clear banner, and turns itself off when you change page.</li>
+          <li>A status line on every page: "Story 2:25 · 4 blocks · 1 voice patch · Sent to Resolve", each part clickable.</li>
+        </ul>
+        <h3>The story is the hub</h3>
+        <ul>
+          <li><b>Story page:</b> blocks you drag, split, trim and remove; what you left out waits in Available. Double-click a sentence to correct its words, ⌥ click to play from there.</li>
+          <li><b>Versions:</b> keep the story as a named version, compare any version with the story now (differences marked on the story itself), restore one or delete it. StoryCraft also keeps one each time you send to Resolve or import an AI story.</li>
+          <li><b>Start fresh</b> with a timeline from Home: its saved transcript, story, versions and voice patches go to an archive folder, and nothing in Resolve changes.</li>
+          <li>Home shows each timeline's story: length, blocks, voice patches and when it was sent.</li>
+        </ul>
+        <h3>Voice patch, with VoiceStudio</h3>
+        <ul>
+          <li><b>Fix a sentence that sounds wrong</b> with a synthetic take in the speaker's voice, made by VoiceStudio (a separate app on your computer). Three takes, side by side.</li>
+          <li>Choose the delivery: an ending that falls or rises, pitch matched to the speaker, the pace and the room's sound.</li>
+          <li>Each new word lands where the original one started, breaths at the edges are trimmed, and short crossfades blend the patch into the recording.</li>
+          <li>An inserted patch plays everywhere in the story, and its words light up in step. In Resolve it arrives as "S011 · first words… (voice patch, take 2)" in a StoryCraft › Voice patches bin, and never changes under a timeline you already sent.</li>
+          <li>Patches are synthetic speech: use them only with the speaker's permission.</li>
+        </ul>
+        <h3>Review cuts and Resolve</h3>
+        <ul>
+          <li><b>Review cuts:</b> every cut of the story, A (as recorded) against B (as the story plays it), with "Sounds good" ticks. After Insert patch it opens on the patch's way in and way out.</li>
+          <li><b>Reload from Resolve:</b> edit the timeline by hand in Resolve and bring it back as a version you can compare. If both sides changed, StoryCraft shows the differences and lets you choose.</li>
+          <li>Track options open in place from Send ▾, and an <b>AI tab</b> gathers every AI helper, with <b>Connect Claude Desktop</b> and <b>Copy command for Claude Code</b> to set up the connector in one click.</li>
+        </ul>
+        <h3>Fixes</h3>
+        <ul>
+          <li>Word corrections and Transcribe again reach the story, Review and Send, and undo and redo keep them in step.</li>
+          <li>Opening another timeline never brings the previous story along, and Transcribe again can no longer write into the wrong timeline.</li>
+          <li>A broken silence analysis no longer empties the story when Cut silences is on.</li>
+          <li>Many smaller fixes to playback, the time readout, block play and status messages, which now show on every page.</li>
+        </ul>
+      </div>
+    </li>
+
+    <li class="rel-item">
       <div class="rel-when"><time datetime="2026-11-07">7 Nov 2026</time><span class="rel-ver">v4.1.0</span></div>
       <div class="rel-body">
         <h2>Speakers, finishing touches and an edit you can read</h2>

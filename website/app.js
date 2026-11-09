@@ -130,19 +130,29 @@
 
   // ── Screenshot gallery ──
   const CAPTIONS = {
-    "clean-up": "Clean up: fillers, repeats and a loud cough found and marked; the inspector shows what the AI found and what each colour does in Resolve.",
-    "story-board": "Compose: the story board with its blocks and target length, next to the transcript and the player.",
-    "start": "Start: pick the timeline or a file, the language and the model, then Analyze.",
+    "story-board": "Story: the blocks in story order, out of recording order, with the target length; what was left out waits in Available. The timeline below shows the story, a voice patch in cyan.",
+    "clean-up": "Clean: the story's sentences in story order, fillers and repeats marked; the parts left out are folded away.",
+    "voice-patch": "Voice patch: a sentence ending redone with VoiceStudio in the speaker's voice, three takes side by side, StoryCraft's pick marked, the original to compare.",
+    "review-cuts": "Review cuts: a voice patch's way in, A (as recorded) against B (as the story plays it), with a Sounds good tick.",
+    "start": "Home: start from Resolve or a file, or continue a story; each timeline shows its story: length, blocks and voice patches.",
     "settings": "Settings: one calm page per topic, with the StoryCraft and StoryCraft Light themes.",
+  };
+  const ALTS = {
+    "story-board": "The StoryCraft Story page: six blocks of an invented bakery interview in story order, Available on the right, the story timeline with a cyan voice patch below",
+    "clean-up": "The StoryCraft Clean page: the story's sentences with fillers and repeats marked, the left-out parts folded away",
+    "voice-patch": "The StoryCraft Voice patch page: a sentence ending chosen, three VoiceStudio takes side by side, the patch in the story",
+    "review-cuts": "The StoryCraft Review cuts page: a voice patch's join selected, with A and B players and a Sounds good tick",
+    "start": "The StoryCraft Home page: start from Resolve or a file, or continue the saved story of a timeline",
+    "settings": "StoryCraft Settings, the General page: language, theme and app icon",
   };
   const LIGHT_NAMES = { "settings": "settings-light" };
   // Raise after replacing any file in assets/shots so browsers drop their cached copy.
-  const SHOTS_V = "2";
+  const SHOTS_V = "4";
   const shotImg = document.getElementById("shot-img");
   const shotCap = document.getElementById("shot-caption");
   const shotTabs = Array.from(document.querySelectorAll("[data-shot]"));
   const modeTabs = Array.from(document.querySelectorAll("[data-mode]"));
-  let shot = "clean-up", mode = "dark";
+  let shot = "story-board", mode = "dark";
   const shotSrc = () => {
     if (mode === "light") return "assets/shots/" + (LIGHT_NAMES[shot] || shot + "-light") + ".jpg?v=" + SHOTS_V;
     return "assets/shots/" + shot + ".jpg?v=" + SHOTS_V;
@@ -156,6 +166,7 @@
       shotImg.onload = () => shotImg.classList.remove("loading");
       shotImg.src = src;
     }
+    if (shotImg) shotImg.alt = ALTS[shot];
     if (shotCap) shotCap.textContent = CAPTIONS[shot];
   };
   shotTabs.forEach((b) => b.addEventListener("click", () => { shot = b.dataset.shot; showShot(); }));
