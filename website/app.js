@@ -171,6 +171,8 @@
   };
   shotTabs.forEach((b) => b.addEventListener("click", () => { shot = b.dataset.shot; showShot(); }));
   modeTabs.forEach((b) => b.addEventListener("click", () => { mode = b.dataset.mode; showShot(); }));
+  // Links elsewhere on the page that open a given screenshot (e.g. the Voice patch section)
+  document.querySelectorAll("[data-goto-shot]").forEach((a) => a.addEventListener("click", () => { shot = a.dataset.gotoShot; showShot(); }));
   const box = document.getElementById("lightbox");
   const boxImg = document.getElementById("lightbox-img");
   const opener = document.querySelector(".shot-open");

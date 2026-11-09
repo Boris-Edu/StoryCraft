@@ -44,7 +44,7 @@ I looked for a tool that did exactly that and couldn't find one. BadWords came c
 - **Any chat AI:** *Copy for AI* gives the transcript grouped into moments, with editing rules. *Import AI edit* checks the answer (length, clips that start mid-thought, two clips making the same point, a name repeated in every clip, Avoid parts, hard-to-hear parts) and writes a fix request to paste back.
 - **Claude, directly:** with the built-in MCP server, Claude reads the transcript, checks its own edit until it flows, puts it on the story board and, if you ask, sends it to Resolve ([setup below](#build-a-story-with-claude)).
 - **Review cuts:** every cut of the story, A (as recorded) against B (as the story plays it), with what is said either side, jumps and loudness changes; the AI uses it to improve the order and the cut points.
-- **Voice patch** (with [VoiceStudio](#works-with-voicestudio-optional-preview)): re-voice a sentence that sounds wrong in the speaker's own voice, with three takes to choose from; the new words land at the original timing and blend into the recording.
+- **Voice patch** (with [VoiceStudio](#voice-patch-fix-errors-noise-and-tone-with-voicestudio)): fix a wrong word, a word lost under a cough or traffic, or an ending that hangs after a cut, in the speaker's own voice. Three takes to choose from; the new words land at the original timing and blend into the recording.
 - **From a script:** paste a script or an outline and the story board follows it; when a line was said twice, the later take wins.
 - **Edits library:** every edit of a timeline is kept with its marks, speakers and story, listed by date or length, and reloads in one click (also by itself when Resolve starts on an edit). The source timeline is backed up as a .drt first.
 
@@ -107,9 +107,19 @@ Setup (StoryCraft open on the timeline; replace `<install>` with StoryCraft's in
 
 Then ask, for example: "Build a 2-minute story from this interview", and afterwards "Review the cuts". The connection only accepts requests from your own computer, with a key that changes every time StoryCraft starts. DaVinci Resolve Studio 21.1's own MCP server (File → Setup AI Assistants) can be connected at the same time.
 
-## Works with VoiceStudio (optional, preview)
+## Voice patch: fix errors, noise and tone (with VoiceStudio)
 
-StoryCraft can find sentence endings that sound unfinished after a cut and replace the last few words with a version in the speaker's own voice. The voice work is done by [VoiceStudio](https://github.com/debpalash/VoiceStudio), a free, open-source app (AGPL-3.0) by Palash Debnath and contributors that you install separately. StoryCraft talks to it on your own computer and doesn't include any of its code. StoryCraft is not affiliated with VoiceStudio. Voice models carry their own licences (the default one is non-commercial), and you need the speaker's permission before generating speech in their voice. Setup and caveats: [docs/VOICESTUDIO.md](docs/VOICESTUDIO.md).
+The best answer in an interview often has one thing wrong with it. Voice patch says those few words again in the speaker's own voice and blends them into the recording, so you can keep the take:
+
+| What's wrong | What Voice patch does |
+|---|---|
+| **Errors:** a wrong year, a wrong name, a tangled phrase | Type the right words and the patch says them. Left alone, it says the same words again without the stumble (fillers and restarts gone). |
+| **Noise:** a cough, a passing truck or a mic bump on the key word | StoryCraft lists the passages that are hard to understand; the patch says them clearly, matched to the room's tone or clean. |
+| **Tone:** a sentence cut where the speaker kept talking, so its last words still rise | StoryCraft finds endings that sound unfinished; the patch ends them as a finished sentence. *Delivery* sets the ending, pitch and pace. |
+
+You get three takes side by side (StoryCraft's pick marked); each word is placed where the original one started, with short crossfades at the edges. Every patch join shows up in Review cuts, and Send to Resolve lays the patch on its own track with the original words muted underneath (direct connection to Resolve Studio). Mark words *To voice patch* in Clean, or pick from what StoryCraft found.
+
+The voice work is done by [VoiceStudio](https://github.com/debpalash/VoiceStudio), a free, open-source app (AGPL-3.0) by Palash Debnath and contributors that you install separately. StoryCraft talks to it on your own computer and doesn't include any of its code. StoryCraft is not affiliated with VoiceStudio. Voice models carry their own licences (the default one is non-commercial), and you need the speaker's permission before generating speech in their voice. Setup and caveats: [docs/VOICESTUDIO.md](docs/VOICESTUDIO.md).
 
 ## If you want to help the original developer
 
