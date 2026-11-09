@@ -12,6 +12,18 @@ I edit video for fun, and what I love most is interviewing people with nothing p
 
 I looked for a tool that did exactly that and couldn't find one. BadWords came closest: it turns your footage into editable text inside DaVinci Resolve. StoryCraft is my version of it, built around **the story**: build it, clean it, check it, send it to Resolve, and every page plays the same story.
 
+## A look inside
+
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="website/assets/shots/story-board-light.jpg"><img src="website/assets/shots/story-board.jpg" alt="The Story page: the story's blocks in order, what was left out in Available, the story timeline below" width="880"></picture><br><sub><b>Story:</b> the hub. Blocks you drag, split and trim; what you left out waits in Available; the timeline below is the story.</sub></p>
+
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="website/assets/shots/clean-up-light.jpg"><img src="website/assets/shots/clean-up.jpg" alt="Clean: the story's sentences with fillers and repeats marked" width="880"></picture><br><sub><b>Clean:</b> the story's own words, fillers and repeats marked, the rest of the interview folded away.</sub></p>
+
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="website/assets/shots/voice-patch-light.jpg"><img src="website/assets/shots/voice-patch.jpg" alt="Voice patch: the original against three takes in the speaker's voice" width="880"></picture><br><sub><b>Voice patch</b> (with VoiceStudio): a sentence that sounds wrong, re-voiced; three takes to choose from.</sub></p>
+
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="website/assets/shots/review-cuts-light.jpg"><img src="website/assets/shots/review-cuts.jpg" alt="Review cuts: A as recorded against B as the story plays it" width="880"></picture><br><sub><b>Review cuts:</b> every cut and every voice-patch join, A (as recorded) against B (as the story plays it).</sub></p>
+
+<sub>Screenshots of the app with an invented interview.</sub>
+
 ## What StoryCraft adds
 
 **Cleaner cuts, automatically**
