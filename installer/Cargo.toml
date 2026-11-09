@@ -1,6 +1,6 @@
 [package]
 name = "storycraft-installer"
-version = "4.1.0"
+version = "4.2.0"
 edition = "2021"
 authors = ["Szymon Wolarz", "Boris-Edu"]
 description = "StoryCraft Setup: a window over setupfiles/setup.py (based on the BadWords installer by Szymon Wolarz)"

@@ -76,6 +76,18 @@ Status: **Merged upstream** = accepted into the original project. **Upstream PR*
 | **No updates from the original project:** the update check and auto-update are off (`CHECK_ORIGINAL_UPDATES = False`), so a BadWords release can't be installed over the fork | Fork only |
 | README "About" section rewritten to credit and support the original author | Fork only |
 
+### v4.2: one story everywhere, Voice patch, versions (fork only)
+| Change | Status |
+|---|---|
+| **One story, one timeline:** every page plays the story as Resolve gets it (blocks in order, cuts skipped, voice patches in); the timeline shows the story in story time with patches in cyan; Clean shows only the story's sentences in story order (the rest folded, can be added back); **Play original** plays the raw recording behind a banner and turns off on page change; a status line on every page (length, blocks, voice patches, cuts to check, Resolve state, each clickable) | Fork only |
+| **Story page** as the hub (hub bar: Story · Versions \| Clean · Review cuts · Voice patch · AI; Home, Settings and Send in the top-right corner): blocks to drag, split, trim, remove; Available panel; mouse shortcuts (⌥ right-click playhead, double-click correct the words, ⌥ click play from here) | Fork only |
+| **Versions:** named versions, automatic ones on Send / AI import / reload; compare with marks on the story; restore; delete one or all (undoable). **Start fresh** (Home ⋯) archives a timeline's transcript, story, versions and patches. Home shows each timeline's story (length, blocks, patches, last send) | Fork only |
+| **Voice patch (VoiceStudio, separate app):** three takes side by side; Delivery (ending, pitch, pace, sound); words placed at the original timing (per-word time map for endings, trimmed edges and pauses for rewrites); span-exact preview with crossfaded edges, played in StoryCraft and laid in Resolve; the patch is transcribed so its words light in step; joins checked in Review cuts; named media in StoryCraft › Voice patches, never overwritten | Fork only |
+| **Review cuts:** A (as recorded) / B (as the story plays it) for every cut and every patch join, "Sounds good" ticks | Fork only |
+| **Resolve round trip:** Reload from Resolve (a hand-edited timeline comes back as a version; conflict dialog when both sides changed); StoryCraft's clips flagged; Track options in place from Send ▾ | Fork only |
+| **AI tab:** every AI helper in one place; Connect Claude Desktop / copy the Claude Code command for the StoryCraft connector | Fork only |
+| Fixes: word corrections and Transcribe again reach the story, Review and Send (undo/redo in step); opening another timeline never carries the previous story; Transcribe again can't write into another timeline; a broken silence analysis no longer empties the story; status messages show on every page; many playback fixes | Fork only |
+
 ### v4.1: speakers, finishing and the edits library (fork only)
 | Change | Status |
 |---|---|
@@ -97,6 +109,7 @@ Status: **Merged upstream** = accepted into the original project. **Upstream PR*
 | Speech-to-text benchmark for Mac (faster-whisper vs mlx-whisper vs Apple Speech), on branch [`feat/mac-asr-benchmark`](https://github.com/Boris-Edu/StoryCraft/tree/feat/mac-asr-benchmark/tools/asr_benchmark) | Fork only |
 
 ## Changelog
+- **2026-11-09:** v4.2.0: one story and one timeline on every page, the Story page as the hub, versions and Start fresh, Voice patch with VoiceStudio (takes, delivery, word timing, seamless joins), Review cuts A/B, Reload from Resolve, AI tab and connector setup; website timeline and screenshots.
 - **2026-11-07:** v4.1.0: up to 10 speakers, finishing in Resolve (Voice Isolation, captions, cameras by speaker, exports to Premiere / Final Cut / OTIO / EDL / AAF), swear words, from script, edits library, edited view, Keep Resolve in sync, playback speed, faster opening; website timeline page.
 - **2026-11-02:** v4.0.1: StoryCraft Setup (graphical installer, downloads on the release page), opt-in usage stats for the original author, Linux installer fixes (no python3-venv, missing update-desktop-database, failed installs now exit 1).
 - **2026-11-02:** first public release, v4.0.0 (the website is not part of the download). PRs #9–#15 merged into BadWords; #16 open.

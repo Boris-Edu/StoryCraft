@@ -10,7 +10,7 @@ More information, and the workflow in pictures: <a href="https://storycraft.dess
 
 I edit video for fun, and what I love most is interviewing people with nothing prepared: no script, no questions sent ahead, just a conversation. The hard part comes afterwards: going through the footage, finding the moments that matter and building them into a story. It's fun, but it takes a lot of time, and that's where AI can help.
 
-I looked for a tool that did exactly that and couldn't find one. BadWords came closest: it turns your footage into editable text inside DaVinci Resolve. StoryCraft is my version of it, built around one flow: **Clean up → Compose → Send to Resolve**.
+I looked for a tool that did exactly that and couldn't find one. BadWords came closest: it turns your footage into editable text inside DaVinci Resolve. StoryCraft is my version of it, built around **the story**: build it, clean it, check it, send it to Resolve, and every page plays the same story.
 
 ## What StoryCraft adds
 
@@ -27,15 +27,17 @@ I looked for a tool that did exactly that and couldn't find one. BadWords came c
 - Roles (main, interviewer, other) and a **Leave out** switch that cuts everything a speaker says. *Copy for AI* names who says each moment.
 
 **Build the story**
-- **Story board:** the transcript as blocks you drag into any order, with a target length and a clarity score on each block (how clearly it was spoken and recorded).
+- **Story page:** the story as blocks you drag into any order, split, trim or remove, with a target length and a clarity score on each block; what you left out waits in *Available*. Right-click a sentence for its menu, double-click to correct its words.
+- **Versions:** keep the story as a named version, compare any version with the story now (the differences are marked on the story), restore or delete one. **Start fresh** with a timeline from Home when you want to begin again.
 - **Any chat AI:** *Copy for AI* gives the transcript grouped into moments, with editing rules. *Import AI edit* checks the answer (length, clips that start mid-thought, two clips making the same point, a name repeated in every clip, Avoid parts, hard-to-hear parts) and writes a fix request to paste back.
 - **Claude, directly:** with the built-in MCP server, Claude reads the transcript, checks its own edit until it flows, puts it on the story board and, if you ask, sends it to Resolve ([setup below](#build-a-story-with-claude)).
-- **Review cuts:** a cut-by-cut review (what is said either side, jumps, loudness changes) that the AI uses to improve the order and the cut points.
+- **Review cuts:** every cut of the story, A (as recorded) against B (as the story plays it), with what is said either side, jumps and loudness changes; the AI uses it to improve the order and the cut points.
+- **Voice patch** (with [VoiceStudio](#works-with-voicestudio-optional-preview)): re-voice a sentence that sounds wrong in the speaker's own voice, with three takes to choose from; the new words land at the original timing and blend into the recording.
 - **From a script:** paste a script or an outline and the story board follows it; when a line was said twice, the later take wins.
 - **Edits library:** every edit of a timeline is kept with its marks, speakers and story, listed by date or length, and reloads in one click (also by itself when Resolve starts on an edit). The source timeline is backed up as a .drt first.
 
 **Watch, then send**
-- **Play edit:** watch the edit, cuts and all, inside StoryCraft before Resolve gets anything, at up to 3× with the voice at its normal pitch. The **Edited** view shows only the words the edit keeps, in story order.
+- **One story, one timeline:** every page plays the story as Resolve will get it (blocks in order, cuts skipped, voice patches in), at up to 3× with the voice at its normal pitch; the timeline under it shows the story, and **Play original** plays the raw recording when you need it.
 - **Send to Resolve:** a new timeline, "*name* StoryCraft Edit N", in a **StoryCraft** bin, with short audio crossfades on every cut, Yellow **Jump cut** markers where the picture jumps within the same shot, and Cocoa **Sound** markers on the sounds the edit keeps. Your source timeline is never changed. Send to Resolve shows when Resolve's timeline is behind your edit; **Keep Resolve in sync** rebuilds it a few seconds after each change (and pauses if you edited it by hand).
 - **Finishing, optional:** Voice Isolation on the dialogue, captions (SRT file or Resolve subtitles, with names), cameras that follow the speaker or Resolve Studio's SmartSwitch, and copies for Premiere (XML), Final Cut (FCPXML), OpenTimelineIO, EDL and AAF.
 
@@ -92,6 +94,10 @@ Setup (StoryCraft open on the timeline; replace `<install>` with StoryCraft's in
   ```
 
 Then ask, for example: "Build a 2-minute story from this interview", and afterwards "Review the cuts". The connection only accepts requests from your own computer, with a key that changes every time StoryCraft starts. DaVinci Resolve Studio 21.1's own MCP server (File → Setup AI Assistants) can be connected at the same time.
+
+## Works with VoiceStudio (optional, preview)
+
+StoryCraft can find sentence endings that sound unfinished after a cut and replace the last few words with a version in the speaker's own voice. The voice work is done by [VoiceStudio](https://github.com/debpalash/VoiceStudio), a free, open-source app (AGPL-3.0) by Palash Debnath and contributors that you install separately. StoryCraft talks to it on your own computer and doesn't include any of its code. StoryCraft is not affiliated with VoiceStudio. Voice models carry their own licences (the default one is non-commercial), and you need the speaker's permission before generating speech in their voice. Setup and caveats: [docs/VOICESTUDIO.md](docs/VOICESTUDIO.md).
 
 ## If you want to help the original developer
 
