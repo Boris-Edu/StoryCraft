@@ -129,8 +129,12 @@ class MainPanelWidget(QWidget):
             l1_hint = self.layer1.layout().sizeHint().height() if self.layer1.layout() else 0
             self._last_l1_hint = l1_hint
             
-        overlap = (l1_hint + h + 20) > self.height()
-        self.layer2.set_overlapping(overlap)
+        # Never overlap: keep room for the content above plus this bottom group. On a short window
+        # the panel (wrapped with scroll=True) scrolls instead of drawing the group over the list.
+        need = l1_hint + h + 12
+        if self.minimumHeight() != need:
+            self.setMinimumHeight(need)
+        self.layer2.set_overlapping(False)
 
     def showEvent(self, event):
         super().showEvent(event)

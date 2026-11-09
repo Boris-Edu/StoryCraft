@@ -30,28 +30,34 @@ class VideoPreviewWidget(QFrame):
     def __init__(self, parent: Optional[QFrame] = None):
         super().__init__(parent)
         self.setObjectName("VideoPreviewWidget")
+        # Same card shape as the waveform beside it: radius S(11), hairline border
         self.setStyleSheet(f"""
             QFrame#VideoPreviewWidget {{
-                background-color: #0c0c0c;
-                border: 1px solid #242424;
-                border-radius: {config.S(6)}px;
+                background-color: #222222;
+                border: 1px solid #303030;
+                border-radius: {config.S(11)}px;
             }}
         """)
         self.setMinimumHeight(config.S(90))
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Inset by the border so the hairline and rounded corners stay visible around the picture
+        inset = max(1, config.S(3))
+        layout.setContentsMargins(inset, inset, inset, inset)
         layout.setSpacing(0)
 
         self.video_widget = QVideoWidget(self)
-        self.video_widget.setStyleSheet(f"background-color: #000000; border-radius: {config.S(6)}px;")
+        self.video_widget.setStyleSheet(f"background-color: #000000; border-radius: {config.S(8)}px;")
         self.video_widget.setAspectRatioMode(Qt.KeepAspectRatio)
         layout.addWidget(self.video_widget)
 
         self.lbl_placeholder = QLabel(self)
         self.lbl_placeholder.setAlignment(Qt.AlignCenter)
-        self.lbl_placeholder.setStyleSheet(f"color: #4a4a4a; font-family: '{config.UI_FONT_NAME}'; font-size: {config.FS(8.5)}pt; font-style: italic;")
+        self.lbl_placeholder.setWordWrap(True)
+        self.lbl_placeholder.setStyleSheet(
+            f"color: #8a8a8a; background: transparent; border: none; font-family: '{config.UI_FONT_NAME}';"
+            f" font-size: {config.FS(9)}pt; padding: 0px {config.S(16)}px;")
         self.lbl_placeholder.setText("Video Preview")
         self.lbl_placeholder.hide()
         layout.addWidget(self.lbl_placeholder)

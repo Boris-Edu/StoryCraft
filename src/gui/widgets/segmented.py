@@ -32,6 +32,12 @@ class SegmentedChoice(QWidget):
         pad = config.S(6) if compact else config.S(10)
         fs = config.FS(8.5) if compact else config.FS(9.5)
         h = config.S(20) if compact else config.INPUT_HEIGHT
+        # Never shorter than the text needs (Settings > Text size makes it larger than S(20) allows)
+        from PySide6.QtGui import QFont, QFontMetrics
+        _f = QFont(config.UI_FONT_NAME)
+        _f.setPointSize(int(fs))
+        _f.setBold(True)  # the checked choice is bold
+        h = max(h, QFontMetrics(_f).height() + config.S(8))
         for i, (value, label) in enumerate(choices):
             btn = QPushButton(label)
             btn.setCheckable(True)

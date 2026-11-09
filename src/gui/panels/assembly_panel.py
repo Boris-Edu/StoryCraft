@@ -12,7 +12,7 @@ Sidebar activity panel for timeline assembly options, inaudible/typo toggles, cu
 """
 
 import os
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QObject, QEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame
 )
@@ -21,16 +21,30 @@ from PySide6.QtGui import QIcon
 import config
 from gui.widgets.labels import QLabel
 from gui.widgets.buttons import QPushButton, ToggleSwitch, StarFavoriteButton
-from .script_panel import wrap_activity_panel
+from .script_panel import (wrap_activity_panel, panel_card, panel_margins, heading_css, quiet_button_css,
+                           combo_css, disclosure_css, hairline, style_segmented, text_px)
+
+
+class _SegmentedRestyler(QObject):
+    """The colour rows are rebuilt by the main window: give their Keep / Mark / Cut / Bleep choices
+    the panel's segmented look (sized from the text) whenever new rows arrive."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.LayoutRequest:
+            from gui.widgets.segmented import SegmentedChoice
+            for seg in obj.findChildren(SegmentedChoice):
+                if not seg.property("_inspector_styled"):
+                    seg.setProperty("_inspector_styled", True)
+                    style_segmented(seg.buttons.values(), 8.5)
+        return False
 
 
 def build_assembly_panel(win) -> QFrame:
     """Build the Assembly activity panel and bind widgets to main window."""
     p_assembly = QWidget()
     l_assembly = QVBoxLayout(p_assembly)
-    l_assembly.setContentsMargins(config.S(15), config.S(15), config.S(15), config.S(15))
-    l_assembly.setSpacing(config.S(15))
-    
+    panel_margins(l_assembly, 12)
+
     def _pin_btn(fav_id: str):
         btn = StarFavoriteButton(size=18)
         win._pin_buttons[fav_id] = btn
@@ -39,49 +53,55 @@ def build_assembly_panel(win) -> QFrame:
     # Colours in this edit: what each colour means, how much of it there is, and
     # whether the next Assemble leaves it out. Rows are filled by win._render_color_legend().
     def _card():
-        card = QFrame()
-        card.setObjectName("PanelCard")
-        card.setStyleSheet(f"""QFrame#PanelCard {{ background: #1e1e1e; border: 1px solid #2e2e2e;
-                               border-radius: {config.S(6)}px; }}""")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(config.S(12), config.S(12), config.S(12), config.S(12))
-        lay.setSpacing(config.S(10))
-        return card, lay
+        return panel_card(10)
 
-    lbl_legend = QLabel(win.txt("legend_title"))
-    lbl_legend.setStyleSheet(f"font-size: {config.FS(12)}pt; font-weight: bold; background: transparent;")
+    def _heading(text):
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(heading_css(12))
+        return lbl
+
+    lbl_legend = _heading(win.txt("legend_title"))
+    l_assembly.addSpacing(config.S(4))
     l_assembly.addWidget(lbl_legend)
     card_legend, l_card_legend = _card()
     win.legend_layout = QVBoxLayout()
-    win.legend_layout.setSpacing(config.S(10))
+    win.legend_layout.setSpacing(config.S(12))
     l_card_legend.addLayout(win.legend_layout)
     l_assembly.addWidget(card_legend)
+    card_legend._seg_restyler = _SegmentedRestyler(card_legend)
+    card_legend.installEventFilter(card_legend._seg_restyler)
     win._legend_signature = None
     win._render_color_legend({})
     # What the AI found: one row per kind, with its count, its switches and Restore.
     # Placed above the colours: first what was detected, then what happens to each colour.
-    lbl_det = QLabel(win.txt("det_title"))
-    lbl_det.setStyleSheet(f"font-size: {config.FS(12)}pt; font-weight: bold; background: transparent;")
+    lbl_det = _heading(win.txt("det_title"))
     card_det, l_card_det = _card()
     l_assembly.insertWidget(0, lbl_det)
     l_assembly.insertWidget(1, card_det)
     win.det_counts = {}
-    _small_btn = f"""
-        QPushButton {{ background: #2a2a2a; color: #d0d0d0; border: 1px solid #3a3a3a; border-radius: {config.S(4)}px;
-                       padding: {config.S(2)}px {config.S(8)}px; font-size: {config.FS(8.5)}pt; }}
-        QPushButton:hover {{ color: #ffffff; border-color: #555; }}"""
+    _small_btn = quiet_button_css(9, 4, 10)
+    _small_h = max(config.S(28), text_px(9) + 2 * config.S(4) + 2)
+    _row_title_css = f"color: #ffffff; font-size: {config.FS(10)}pt; font-weight: 600; background: transparent;"
+
+    def _small(btn):
+        btn.setStyleSheet(_small_btn)
+        btn.setMinimumHeight(_small_h)
+        return btn
 
     def _det_row(kind, title_key):
+        if l_card_det.count():
+            l_card_det.addWidget(hairline())   # rows apart, without a box around each
         box = QVBoxLayout()
-        box.setSpacing(config.S(2))
+        box.setSpacing(config.S(6))
         top = QHBoxLayout()
-        top.setSpacing(config.S(6))
+        top.setSpacing(config.S(8))
         title = QLabel(win.txt(title_key))
-        title.setStyleSheet("font-weight: bold; background: transparent;")
-        top.addWidget(title)
-        top.addStretch()
+        title.setWordWrap(True)
+        title.setStyleSheet(_row_title_css)
+        top.addWidget(title, 1)
         count = QLabel("")
-        count.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(8.5)}pt; background: transparent;")
+        count.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(9)}pt; background: transparent;")
         win.det_counts[kind] = count
         box.addLayout(top)
         bottom = QHBoxLayout()
@@ -91,7 +111,7 @@ def build_assembly_panel(win) -> QFrame:
         restore = QPushButton(win.txt("btn_det_restore"))
         restore.setCursor(Qt.PointingHandCursor)
         restore.setToolTip(win.txt("tt_det_restore"))
-        restore.setStyleSheet(_small_btn)
+        _small(restore)
         restore.clicked.connect(lambda: win._restore_ai_kind(kind))
         bottom.addWidget(restore)
         box.addLayout(bottom)
@@ -109,7 +129,7 @@ def build_assembly_panel(win) -> QFrame:
     top.addWidget(tgl_fill)
     edit_list = QPushButton(win.txt("btn_det_edit_list"))
     edit_list.setCursor(Qt.PointingHandCursor)
-    edit_list.setStyleSheet(_small_btn)
+    _small(edit_list)
     edit_list.clicked.connect(lambda: win._open_activity("fillers"))
     bottom.insertWidget(2, edit_list)
     l_card_det.addLayout(box)
@@ -119,7 +139,7 @@ def build_assembly_panel(win) -> QFrame:
     detect = QPushButton(win.txt("btn_det_detect"))
     detect.setCursor(Qt.PointingHandCursor)
     detect.setToolTip(win.txt("tt_det_detect"))
-    detect.setStyleSheet(_small_btn)
+    _small(detect)
     detect.clicked.connect(lambda: win._on_analyze_standalone())
     top.addWidget(detect)
     l_card_det.addLayout(box)
@@ -129,7 +149,7 @@ def build_assembly_panel(win) -> QFrame:
     det_st = QPushButton(win.txt("btn_det_detect"))
     det_st.setCursor(Qt.PointingHandCursor)
     det_st.setToolTip(win.txt("tt_det_stammers"))
-    det_st.setStyleSheet(_small_btn)
+    _small(det_st)
     det_st.clicked.connect(lambda: win._detect_stammers())
     top.addWidget(det_st)
     l_card_det.addLayout(box)
@@ -139,27 +159,72 @@ def build_assembly_panel(win) -> QFrame:
     det_sw = QPushButton(win.txt("btn_det_detect"))
     det_sw.setCursor(Qt.PointingHandCursor)
     det_sw.setToolTip(win.txt("tt_det_swears"))
-    det_sw.setStyleSheet(_small_btn)
+    _small(det_sw)
     det_sw.clicked.connect(lambda: win._detect_swears())
     top.addWidget(det_sw)
     l_card_det.addLayout(box)
+
+    # To voice patch: what the Voice tab lists (endings that sound unfinished, hard to understand,
+    # incoherent, tagged by you). Mark them puts the To voice patch marker on those words (one undo
+    # step; it is a Keep colour, so the edit doesn't change); Open Voice goes there to patch them.
+    l_card_det.addWidget(hairline())
+    v_box = QVBoxLayout()
+    v_box.setSpacing(config.S(6))
+    v_top = QHBoxLayout()
+    v_top.setSpacing(config.S(8))
+    v_title = QLabel(win.txt("det_voice", "To voice patch"))
+    v_title.setWordWrap(True)
+    v_title.setStyleSheet(_row_title_css)
+    v_title.setToolTip(win.txt("tt_det_voice", "Passages a voice patch could fix: endings that sound unfinished, "
+                               "sentences that are hard to understand or incoherent, and words you marked "
+                               "To voice patch."))
+    v_top.addWidget(v_title, 1)
+    v_mark = QPushButton(win.txt("btn_det_voice_mark", "Mark them"))
+    v_mark.setCursor(Qt.PointingHandCursor)
+    v_mark.setToolTip(win.txt("tt_det_voice_mark", "Puts the To voice patch marker on these words (it keeps "
+                              "them in the story and colours nothing in Resolve). Undo takes it off."))
+    _small(v_mark)
+    v_mark.clicked.connect(lambda: win._mark_voice_candidates())
+    win.btn_voice_mark = v_mark
+    v_top.addWidget(v_mark)
+    v_box.addLayout(v_top)
+    v_bottom = QHBoxLayout()
+    v_bottom.setSpacing(config.S(6))
+    win.det_voice_count = QLabel("")
+    win.det_voice_count.setWordWrap(True)
+    win.det_voice_count.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(9)}pt; background: transparent;")
+    v_bottom.addWidget(win.det_voice_count, 1)
+    v_open = QPushButton(win.txt("btn_det_voice_open", "Open Voice patch"))
+    v_open.setCursor(Qt.PointingHandCursor)
+    v_open.setToolTip(win.txt("tt_det_voice_open", "Make the patches with VoiceStudio."))
+    _small(v_open)
+    v_open.clicked.connect(lambda: win.show_voice())
+    v_bottom.addWidget(v_open)
+    v_box.addLayout(v_bottom)
+    l_card_det.addLayout(v_box)
+    if hasattr(win, '_refresh_voice_found'):
+        win._refresh_voice_found()
 
     # Speakers: find up to 10 voices, then name them, set their role or leave one out of the edit.
     # Rows are filled by win._refresh_speakers_card(); a passage changes speaker from the transcript
     # (select it, right-click > Speaker) or by clicking a name tag.
     from PySide6.QtWidgets import QComboBox
+    l_card_det.addWidget(hairline())
     spk_box = QVBoxLayout()
-    spk_box.setSpacing(config.S(6))
+    spk_box.setSpacing(config.S(8))
     spk_top = QHBoxLayout()
     spk_top.setSpacing(config.S(6))
     spk_title = QLabel(win.txt("spk_title"))
-    spk_title.setStyleSheet("font-weight: bold; background: transparent;")
+    spk_title.setStyleSheet(_row_title_css)
     spk_top.addWidget(spk_title)
     spk_top.addWidget(win._create_info_icon("tt_spk_title"))
     spk_top.addStretch()
+    # How many voices and Detect on their own line: "Detecting… 42%" needs the room
+    spk_ctl = QHBoxLayout()
+    spk_ctl.setSpacing(config.S(6))
     win.cmb_spk_count = QComboBox()
     win.cmb_spk_count.addItem(win.txt("spk_count_auto"), None)
-    for n in range(2, 11):
+    for n in range(1, 11):  # 1: a single voice, everyone is Speaker 1 (no detection needed)
         win.cmb_spk_count.addItem(str(n), n)
     win.cmb_spk_count.setToolTip(win.txt("tt_spk_count"))
     _saved_n = (win.engine.load_preferences() or {}).get('speaker_count')
@@ -168,20 +233,19 @@ def build_assembly_panel(win) -> QFrame:
     win.cmb_spk_count.currentIndexChanged.connect(
         lambda _i: win.engine.save_preferences({"speaker_count": win.cmb_spk_count.currentData()}))
     win.cmb_spk_count.setCursor(Qt.PointingHandCursor)
-    win.cmb_spk_count.setStyleSheet(f"""
-        QComboBox {{ background: #2a2a2a; color: #d0d0d0; border: 1px solid #3a3a3a; border-radius: {config.S(4)}px;
-            padding: {config.S(2)}px {config.S(6)}px; font-size: {config.FS(8.5)}pt; }}
-        QComboBox QAbstractItemView {{ background: #222222; color: #e6e6e6; selection-background-color: #23a559; }}
-    """)
-    spk_top.addWidget(win.cmb_spk_count)
+    win.cmb_spk_count.setStyleSheet(combo_css(9))
+    win.cmb_spk_count.setMinimumHeight(_small_h)
+    spk_ctl.addWidget(win.cmb_spk_count)
+    spk_ctl.addStretch()
     det_spk = QPushButton(win.txt("btn_det_detect"))
     det_spk.setCursor(Qt.PointingHandCursor)
     det_spk.setToolTip(win.txt("tt_det_speakers"))
-    det_spk.setStyleSheet(_small_btn)
+    _small(det_spk)
     det_spk.clicked.connect(lambda: win._detect_speakers())
     win.btn_det_speakers = det_spk
-    spk_top.addWidget(det_spk)
+    spk_ctl.addWidget(det_spk)
     spk_box.addLayout(spk_top)
+    spk_box.addLayout(spk_ctl)
     win.speakers_rows = QVBoxLayout()
     win.speakers_rows.setSpacing(config.S(8))
     spk_box.addLayout(win.speakers_rows)
@@ -211,9 +275,9 @@ def build_assembly_panel(win) -> QFrame:
     show_row = QHBoxLayout()
     show_row.setSpacing(config.S(6))
     lbl_show = QLabel(win.txt("lbl_show_inaudible_fragments"))
-    lbl_show.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(8.5)}pt; background: transparent;")
-    show_row.addWidget(lbl_show)
-    show_row.addStretch()
+    lbl_show.setWordWrap(True)
+    lbl_show.setStyleSheet(f"color: #a3a3a3; font-size: {config.FS(9)}pt; background: transparent;")
+    show_row.addWidget(lbl_show, 1)
     win.tgl_show_inaudible = ToggleSwitch()
     win.tgl_show_inaudible.setChecked(True)
     win.tgl_show_inaudible.toggled.connect(lambda c: (win._on_inaudible_toggled(c), win._save_top_toggles_prefs()))
@@ -228,12 +292,12 @@ def build_assembly_panel(win) -> QFrame:
     review = QPushButton(win.txt("btn_review_sounds"))
     review.setCursor(Qt.PointingHandCursor)
     review.setToolTip(win.txt("tt_review_sounds"))
-    review.setStyleSheet(_small_btn)
+    _small(review)
     review.clicked.connect(lambda: win._review_next_sound())
     sound_row.addWidget(review)
     win.btn_sound_choice = QPushButton(win.txt("btn_sound_cut"))
     win.btn_sound_choice.setCursor(Qt.PointingHandCursor)
-    win.btn_sound_choice.setStyleSheet(_small_btn)
+    _small(win.btn_sound_choice)
     win.btn_sound_choice.setEnabled(False)
     win.btn_sound_choice.clicked.connect(lambda: win._toggle_sound_choice())
     sound_row.addWidget(win.btn_sound_choice)
@@ -244,13 +308,9 @@ def build_assembly_panel(win) -> QFrame:
     win.color_cut_buttons = {}
     
     l_colors_container = QVBoxLayout()
-    l_colors_container.setSpacing(config.S(10))
-    
-    div_top = QFrame()
-    div_top.setFixedHeight(config.S(1))
-    div_top.setStyleSheet("background-color: #383838; margin: 0px; border: none;")
-    l_colors_container.addWidget(div_top)
-    
+    l_colors_container.setContentsMargins(config.S(14), config.S(10), config.S(10), config.S(10))
+    l_colors_container.setSpacing(config.S(8))
+
     from gui.utils import get_layout_icon_path
 
     color_idx = 0
@@ -302,6 +362,8 @@ def build_assembly_panel(win) -> QFrame:
         row_color.addWidget(btn_cut_now)
         if btn_auto:
             row_color.addWidget(btn_auto)
+        else:
+            row_color.addSpacing(config.S(24))  # keeps the icons of every row in the same columns
         row_color.addWidget(pin_c)
         
         l_colors_container.addLayout(row_color)
@@ -313,21 +375,17 @@ def build_assembly_panel(win) -> QFrame:
         
         color_idx += 1
         if color_idx == 3:
-            div = QFrame()
-            div.setFixedHeight(1)
-            div.setStyleSheet("background-color: #383838; margin: 0px; border: none;")
-            l_colors_container.addWidget(div)
+            l_colors_container.addWidget(hairline())
         
     btn_tools = QPushButton("▸  " + win.txt("lbl_resolve_tools"))
     btn_tools.setCheckable(True)
     btn_tools.setCursor(Qt.PointingHandCursor)
     btn_tools.setToolTip(win.txt("tt_resolve_tools"))
-    btn_tools.setStyleSheet(f"""
-        QPushButton {{ background: transparent; border: none; color: #9a9a9a; text-align: left;
-            padding: {config.S(2)}px 0; font-size: {config.FS(9)}pt; font-weight: bold; }}
-        QPushButton:hover {{ color: #ffffff; }}
-    """)
-    tools_box = QWidget()
+    btn_tools.setStyleSheet(disclosure_css(9.5))
+    btn_tools.setMinimumWidth(config.S(120))  # long translations: cut at the edge, never wider than the panel
+    tools_box = QFrame()
+    tools_box.setObjectName("PanelCard")
+    tools_box.setStyleSheet(card_legend.styleSheet())
     tools_box.setLayout(l_colors_container)
     tools_box.setVisible(False)
     btn_tools.toggled.connect(lambda c: (tools_box.setVisible(c),

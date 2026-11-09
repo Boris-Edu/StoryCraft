@@ -33,7 +33,7 @@ USAGE_STATS_ENABLED = True
 USAGE_STATS_APP = "storycraft"
 # The original's "Send report" goes to its author's server: off in the fork (Settings shows Logs instead)
 SUPPORT_REPORTS_ENABLED = False
-VERSION = "4.1.0"
+VERSION = "4.2.0"
 # Media Pool bin and timeline names in Resolve. Timelines made by the original app
 # ("... BadWords Edit N") still count when numbering new edits.
 RESOLVE_BIN = "StoryCraft"
@@ -52,6 +52,29 @@ IS_WIN = platform.system() == "Windows"
 # Global Scale Factor (defaults: 0.85 on macOS, 1.0 on standard 1080p/4K Windows/Linux)
 SCALE_FACTOR = 0.85 if IS_MAC else 1.0
 
+# Text size (Settings > General > Text size, applied at start). Qt draws 1 pt as 1 px on macOS and as
+# 1.33 px on Windows/Linux, so the interface's 8-10 pt type read very small on a Mac. "compact" is the
+# original sizing; "comfortable" (default) and "large" grow small text the most and, on macOS, the
+# spacing with it (SCALE_FACTOR), so the layout keeps its proportions.
+#   name: (macOS spacing scale, macOS text multiplier, Windows/Linux text multiplier)
+TEXT_SIZES = {
+    "compact":     (0.85, None, 1.00),
+    "comfortable": (0.92, 1.12, 1.08),
+    "large":       (1.00, 1.25, 1.18),
+}
+TEXT_SIZE = "comfortable"
+
+
+def set_text_size(name):
+    """Choose the text size before init_ui_scaling() (main.py reads the preference first)."""
+    global TEXT_SIZE
+    TEXT_SIZE = name if name in TEXT_SIZES else "comfortable"
+    import sys
+    for mod_name in ('config', 'src.config'):
+        mod = sys.modules.get(mod_name)
+        if mod:
+            setattr(mod, 'TEXT_SIZE', TEXT_SIZE)
+
 def init_ui_scaling(app=None):
     """
     Initializes or dynamically adjusts SCALE_FACTOR based on the primary screen's available height.
@@ -64,8 +87,8 @@ def init_ui_scaling(app=None):
         from PySide6.QtGui import QGuiApplication
         screen = QGuiApplication.primaryScreen()
         if platform.system() == "Darwin":
-            # On macOS Retina/MacBook screens, 0.85 gives compact, balanced layout
-            SCALE_FACTOR = 0.85
+            # On macOS: 0.85 is the compact layout; the text size setting raises it with the type
+            SCALE_FACTOR = TEXT_SIZES.get(TEXT_SIZE, TEXT_SIZES["comfortable"])[0]
         elif screen:
             avail_geo = screen.availableGeometry()
             avail_h = avail_geo.height()
@@ -85,8 +108,8 @@ def init_ui_scaling(app=None):
 
     CFG_WINDOW_W_BASE = S(400)
     CFG_WINDOW_H_BASE = S(740)
-    SETTINGS_WINDOW_W = S(750)
-    SETTINGS_WINDOW_H = S(580)
+    SETTINGS_WINDOW_W = TS(750)
+    SETTINGS_WINDOW_H = TS(580)
     SIDEBAR_WIDTH = S(50)
     BTN_HEIGHT = S(32)
     INPUT_HEIGHT = S(30)
@@ -127,9 +150,20 @@ def S(px: int | float) -> int:
 
 def FS(pt: int | float) -> int:
     """Scales font point sizes smoothly (+1pt on macOS for enhanced legibility, standard on Windows/Linux)."""
+    _mac_scale, mac_mult, other_mult = TEXT_SIZES.get(TEXT_SIZE, TEXT_SIZES["comfortable"])
     if IS_MAC:
-        return int(pt) + 1
-    return max(8, int(round(pt * SCALE_FACTOR)))
+        if mac_mult is None:
+            return int(pt) + 1
+        # Small text grows the most (9 pt -> 11, 10 -> 12 in comfortable); headings a little
+        if pt <= 14:
+            return int(round((pt + 1) * mac_mult))
+        return int(pt) + 1 + int(round(15 * (mac_mult - 1.0)))  # continuous at 14 pt: +3 / +5
+    return max(8, int(round(pt * SCALE_FACTOR * other_mult)))
+
+def TS(px: int | float) -> int:
+    """S() for boxes sized around text (the Settings window, its menu): they grow with the text size."""
+    room = {"compact": 1.0, "comfortable": 1.08, "large": 1.18}.get(TEXT_SIZE, 1.08)
+    return S(px * room)
 
 def SP(pt: int | float) -> int:
     """Alias for font scaling."""
@@ -138,8 +172,8 @@ def SP(pt: int | float) -> int:
 # Base dimensions scaled uniformly
 CFG_WINDOW_W_BASE = S(400)
 CFG_WINDOW_H_BASE = S(740)
-SETTINGS_WINDOW_W = S(750)
-SETTINGS_WINDOW_H = S(580)
+SETTINGS_WINDOW_W = TS(750)
+SETTINGS_WINDOW_H = TS(580)
 SIDEBAR_WIDTH = S(50)
 BTN_HEIGHT = S(32)
 INPUT_HEIGHT = S(30)

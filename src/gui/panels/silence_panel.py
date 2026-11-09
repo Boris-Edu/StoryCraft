@@ -18,22 +18,19 @@ from PySide6.QtWidgets import (
 import config
 from gui.widgets.labels import QLabel
 from gui.widgets.buttons import QPushButton, ToggleSwitch, ReloadButton
-from .script_panel import wrap_activity_panel
+from .script_panel import (wrap_activity_panel, panel_card, panel_header, panel_margins, input_css,
+                           caption_css, sublabel_css, style_segmented, text_px)
 
 
 def build_silence_panel(win) -> QFrame:
     """Build the Silence Detection activity panel and bind widgets to main window."""
     p_silence = QWidget()
     l_silence = QVBoxLayout(p_silence)
-    l_silence.setContentsMargins(config.S(15), config.S(15), config.S(15), config.S(15))
-    l_silence.setSpacing(config.S(10))
-    
-    _sil_input_style = f"""
-        QLineEdit {{ background: #1e1e1e; color: #d4d4d4; border: 1px solid #3a3a3a;
-        border-radius: {config.S(3)}px; padding: {config.S(2)}px {config.S(6)}px; outline: none;
-        font-family: '{config.UI_FONT_NAME}'; font-size: {config.FS(9.5)}pt; }}
-        QLineEdit:focus {{ border: 1px solid #1a7a3e; outline: none; }}
-    """
+    panel_margins(l_silence)
+
+    _sil_input_style = input_css("QLineEdit", 9.5)
+    # Fields as tall as their text needs (the larger text sizes clipped a fixed 30 px box)
+    _field_h = max(config.INPUT_HEIGHT, text_px(9.5) + 2 * config.S(5) + 2)
     _sil_rst_style = f"""
         QPushButton {{ background: transparent; border: 1px solid #444;
         border-radius: {config.S(3)}px; color: #777; font-size: {config.FS(11)}pt; }}
@@ -43,14 +40,15 @@ def build_silence_panel(win) -> QFrame:
     def _sil_row(label_text, widget, rst_btn):
         # Name above, field and reset below: fits a narrow panel (like the sliders above)
         col = QVBoxLayout()
-        col.setSpacing(config.S(4))
+        col.setSpacing(config.S(5))
         lbl = QLabel(label_text)
         lbl.setWordWrap(True)
-        lbl.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(9)}pt; background: transparent;")
+        lbl.setStyleSheet(sublabel_css(9))
         col.addWidget(lbl)
         row = QHBoxLayout()
+        row.setSpacing(config.S(6))
         row.addWidget(widget, 1)
-        row.addWidget(rst_btn)
+        row.addWidget(rst_btn, 0, Qt.AlignVCenter)
         col.addLayout(row)
         return col
 
@@ -59,7 +57,7 @@ def build_silence_panel(win) -> QFrame:
     win.spin_thresh = QLineEdit()
     win.spin_thresh.setText(str(_sil_prefs.get('silence_threshold_db', _sil_prefs.get('ui_spin_thresh', -42.0))))
     win.spin_thresh.setMinimumWidth(config.S(60))
-    win.spin_thresh.setFixedHeight(config.INPUT_HEIGHT)
+    win.spin_thresh.setFixedHeight(_field_h)
     win.spin_thresh.setStyleSheet(_sil_input_style)
     _rst_thresh = ReloadButton(size=30)
     _rst_thresh.clicked.connect(lambda: (
@@ -70,7 +68,7 @@ def build_silence_panel(win) -> QFrame:
     win.spin_pad = QLineEdit()
     win.spin_pad.setText(str(_sil_prefs.get('ui_spin_pad', 0.1)))
     win.spin_pad.setMinimumWidth(config.S(60))
-    win.spin_pad.setFixedHeight(config.INPUT_HEIGHT)
+    win.spin_pad.setFixedHeight(_field_h)
     win.spin_pad.setStyleSheet(_sil_input_style)
     _rst_pad = ReloadButton(size=30)
     _rst_pad.clicked.connect(lambda: (
@@ -81,7 +79,7 @@ def build_silence_panel(win) -> QFrame:
     win.spin_silence_min_dur = QLineEdit()
     win.spin_silence_min_dur.setText(str(_sil_prefs.get('silence_min_dur', 0.2)))
     win.spin_silence_min_dur.setMinimumWidth(config.S(60))
-    win.spin_silence_min_dur.setFixedHeight(config.INPUT_HEIGHT)
+    win.spin_silence_min_dur.setFixedHeight(_field_h)
     win.spin_silence_min_dur.setStyleSheet(_sil_input_style)
     win.spin_silence_min_dur.setToolTip(
         "Minimum duration (in seconds) for a gap to be classified as silence. "
@@ -115,28 +113,16 @@ def build_silence_panel(win) -> QFrame:
     win.spin_silence_keep = _tuning_slider('silence_keep', "lbl_silence_keep", 0.0, 0.0, 1.0, 0.05, " s", 2, "tt_silence_keep")
 
     def _card():
-        card = QFrame()
-        card.setObjectName("PanelCard")
-        card.setStyleSheet(f"""QFrame#PanelCard {{ background: #1e1e1e; border: 1px solid #2e2e2e;
-                               border-radius: {config.S(6)}px; }}""")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(config.S(12), config.S(12), config.S(12), config.S(12))
-        lay.setSpacing(config.S(10))
-        return card, lay
+        return panel_card(12)
 
     # Title, then one card for what happens to pauses, one for how they are detected
-    lbl_title = QLabel(win.txt("lbl_pauses"))
-    lbl_title.setStyleSheet(f"font-size: {config.FS(12)}pt; font-weight: bold; background: transparent;")
-    l_silence.addWidget(lbl_title)
-    lbl_sub = QLabel(win.txt("sub_pauses"))
-    lbl_sub.setWordWrap(True)
-    lbl_sub.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(9)}pt; background: transparent;")
-    l_silence.addWidget(lbl_sub)
+    panel_header(l_silence, win.txt("lbl_pauses"), win.txt("sub_pauses"))
     card_mode, l_card_mode = _card()
     l_silence.addWidget(card_mode)
 
     # One choice for what happens to pauses: Keep / Mark / Cut
     row_pause_mode = QHBoxLayout()
+    row_pause_mode.setSpacing(config.S(8))
     seg = QHBoxLayout()
     seg.setSpacing(0)
     win.pause_mode_group = QButtonGroup(p_silence)
@@ -147,37 +133,26 @@ def build_silence_panel(win) -> QFrame:
         btn = QPushButton(win.txt(key))
         btn.setCheckable(True)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedHeight(config.INPUT_HEIGHT)
-        r_l = config.S(4) if i == 0 else 0
-        r_r = config.S(4) if i == len(_modes) - 1 else 0
-        btn.setStyleSheet(f"""
-            QPushButton {{ background: #2a2a2a; color: #b0b0b0; border: 1px solid #3a3a3a;
-                border-top-left-radius: {r_l}px; border-bottom-left-radius: {r_l}px;
-                border-top-right-radius: {r_r}px; border-bottom-right-radius: {r_r}px;
-                padding: 0 {config.S(10)}px; font-family: '{config.UI_FONT_NAME}'; font-size: {config.FS(9.5)}pt; }}
-            QPushButton:hover {{ color: #ffffff; }}
-            QPushButton:checked {{ background: {config.BTN_BG}; color: #ffffff; border-color: {config.BTN_BG}; font-weight: bold; }}
-        """)
         win.pause_mode_group.addButton(btn)
         win.pause_mode_buttons[mode] = btn
         seg.addWidget(btn)
-    row_pause_mode.addLayout(seg)
-    row_pause_mode.addStretch()
+    style_segmented(win.pause_mode_buttons.values(), 9.5, stretch=True)
+    row_pause_mode.addLayout(seg, 1)
     row_pause_mode.addWidget(win._create_info_icon("tt_pause_mode"))
     l_card_mode.addLayout(row_pause_mode)
 
     # Live readout of what the current settings do (filled by the waveform preview)
     win.lbl_silence_stats = QLabel("")
     win.lbl_silence_stats.setWordWrap(True)
-    win.lbl_silence_stats.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(9)}pt; background: transparent;")
+    win.lbl_silence_stats.setStyleSheet(sublabel_css(9))
     l_card_mode.addWidget(win.lbl_silence_stats)
     l_card_mode.addWidget(win.spin_silence_cut_pct)
     l_card_mode.addWidget(win.spin_silence_min_clip)
     l_card_mode.addWidget(win.spin_silence_keep)
 
     card_detect, l_card_detect = _card()
-    lbl_detect = QLabel(win.txt("lbl_pause_detection"))
-    lbl_detect.setStyleSheet(f"color: #888888; font-size: {config.FS(8)}pt; font-weight: bold; text-transform: uppercase; background: transparent;")
+    lbl_detect = QLabel(win.txt("lbl_pause_detection").upper())
+    lbl_detect.setStyleSheet(caption_css())
     l_card_detect.addWidget(lbl_detect)
     l_card_detect.addLayout(_sil_row(win.txt("lbl_threshold_db"), win.spin_thresh, _rst_thresh))
     l_card_detect.addLayout(_sil_row(win.txt("lbl_padding_s"), win.spin_pad, _rst_pad))
@@ -214,8 +189,10 @@ def build_silence_panel(win) -> QFrame:
         if not btn.isChecked():
             btn.setChecked(True)
 
-    def _on_pause_mode_clicked(btn):
-        mode = next(m for m, b in win.pause_mode_buttons.items() if b is btn)
+    def _current_pause_mode():
+        return "cut" if win.tgl_silence_cut.isChecked() else ("mark" if win.tgl_silence_mark.isChecked() else "keep")
+
+    def _apply_pause_mode(mode):
         if mode == "keep":
             win.tgl_silence_cut.setChecked(False)
             win.tgl_silence_mark.setChecked(False)
@@ -223,6 +200,14 @@ def build_silence_panel(win) -> QFrame:
             win.tgl_silence_mark.setChecked(True)
         else:
             win.tgl_silence_cut.setChecked(True)
+
+    def _on_pause_mode_clicked(btn):
+        mode = next(m for m, b in win.pause_mode_buttons.items() if b is btn)
+        before = _current_pause_mode()
+        _apply_pause_mode(mode)
+        if before != mode and getattr(win, 'undo_manager', None) is not None:
+            win.undo_manager.push_state(_current_pause_mode, _apply_pause_mode, before)
+    win._current_pause_mode, win._apply_pause_mode = _current_pause_mode, _apply_pause_mode
 
     win.tgl_silence_cut.toggled.connect(_on_sil_cut_toggled)
     win.tgl_silence_mark.toggled.connect(_on_sil_mark_toggled)

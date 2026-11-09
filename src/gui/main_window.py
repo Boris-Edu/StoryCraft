@@ -67,6 +67,8 @@ _QRadioButton = QRadioButton
 from .utils import _app_icon, _txt, get_layout_icon_path
 from .components.dialogs import TelemetryPopup, CustomMsgBox, UpdateNotifyDialog, SettingsDialog, GlobalAppFilter, SidebarDragZone, UpdateCheckThread
 from .components.search_overlay import SearchOverlayWidget
+
+_UNDO_KEY_TEXT = "⌘Z" if platform.system() == "Darwin" else "Ctrl+Z"
 from .components.mixins import FramelessWindowMixin, _HAS_QFRAMELESS, _BaseMainWindow
 from .components.titlebar import CustomTitleBar
 from .components.top_status_island import TopStatusIsland
@@ -825,15 +827,47 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         self._stack = QStackedWidget()
         self._stack.setObjectName("stack")
         self._stack.setStyleSheet(f"QStackedWidget#stack {{ background-color: {config.BG_COLOR}; }}")
-        self._stack.addWidget(self._build_welcome_screen())   # index 0
+        # Page 0 holds Home (what to start from, recent timelines) and the set-up form behind it
+        from gui.views.home_view import HomeView, home_back_button
+        self.home_stack = QStackedWidget()
+        self.home_stack.setObjectName("homeStack")
+        self.home_stack.setStyleSheet(f"QStackedWidget#homeStack {{ background-color: {config.BG_COLOR}; }}")
+        _setup_form = self._build_welcome_screen()
+        self.home_view = HomeView(self)
+        self.home_stack.addWidget(self.home_view)             # 0: Home
+        self.home_stack.addWidget(_setup_form)                # 1: set-up form (welcome_view)
+        self._home_back = home_back_button(self, _setup_form)
+        self.home_stack.setCurrentIndex(0)
+        self._stack.addWidget(self.home_stack)                # index 0
         self._stack.addWidget(self._build_page_processing())  # index 1
         self._stack.addWidget(self._build_page_editor())      # index 2
+        # index 3: Review (cut by cut, A/B), built the first time it opens (gui/views/review_view.py)
+        self._review_host = QWidget()
+        self._review_host.setObjectName("reviewHost")
+        self._review_host.setStyleSheet(f"QWidget#reviewHost {{ background-color: {config.BG_COLOR}; }}")
+        QVBoxLayout(self._review_host).setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._review_host)
+        # index 4: Voice (everything with VoiceStudio), built the first time it opens (gui/views/voice_view.py)
+        self._voice_host = QWidget()
+        QVBoxLayout(self._voice_host).setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._voice_host)
+        # index 5: Story (the story block by block), built the first time it opens (gui/views/story_workspace.py)
+        self._story_host = QWidget()
+        QVBoxLayout(self._story_host).setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._story_host)
+        # index 6: AI (every AI helper in one place), built the first time it opens (gui/views/ai_view.py)
+        self._ai_host = QWidget()
+        QVBoxLayout(self._ai_host).setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._ai_host)
         self._stack.setCurrentIndex(0)
 
         self._panel_right = QFrame()
-        self._panel_right.setMinimumWidth(config.S(150))
+        # The inspector's panels (story board, edits, colours) need ~330 px: narrower, they break up
+        self._panel_right.setMinimumWidth(config.TS(320))
         self._panel_right.setObjectName("rightPanel")
-        self._panel_right.setStyleSheet(f"QFrame#rightPanel {{ background-color: {config.BG_COLOR}; }} QFrame#ActivityPanel {{ background-color: #212121; border-radius: {config.S(6)}px; }}")
+        # The inspector: a quieter surface than the transcript, set off by a hairline
+        self._panel_right.setStyleSheet(f"QFrame#rightPanel {{ background-color: #1a1a1a; border-left: 1px solid #2a2a2a; }}"
+                                        f" QFrame#ActivityPanel {{ background-color: #212121; border-radius: {config.S(10)}px; }}")
         QVBoxLayout(self._panel_right).setContentsMargins(0, 0, 0, 0)
         self._build_inspector_tabs()
         self._panel_right.hide()
@@ -866,19 +900,35 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         self._main_h_splitter.setHandleWidth(config.S(6))
         self._main_h_splitter.setStyleSheet("QSplitter { border: none; background: transparent; }")
 
-        # Add everything to main layout in exact order
+        # Add everything to main layout in exact order: the workspace rail first (Home, Clean up, Compose)
+        from gui.components.workspace_rail import WorkspaceRail
+        self.workspace_rail = WorkspaceRail(self, main_container)
+        main_layout.addWidget(self.workspace_rail)
+        # The side rail duplicated the hub bar at the top of every work page: hidden (kept for its state);
+        # Home and Settings live in the window's top-right corner instead
+        self.workspace_rail.hide()
+        self._main_container = main_container
         main_layout.addWidget(self._sidebar_left)
         main_layout.addWidget(self._main_h_splitter)
         main_layout.addWidget(self._sidebar_right)
 
         # ── CSD: add content area under the title bar in the root frame ───────
         self._root_layout.addWidget(main_container, 1)
+        from gui.components.corner_actions import CornerActions, watch_visibility
+        self.corner_actions = CornerActions(self, main_container)
+        from gui.components.toast import Toast
+        self.toast = Toast(main_container)
+        self._corner_watch = watch_visibility(self._panel_right, lambda: self._fit_editor_bar_to_corner())
 
         # ── Full-width Bottom Media Preview & Playback Dock ──────────────────
         from gui.components.audio_preview import AudioPreviewWidget
         self.audio_preview = AudioPreviewWidget(self._root_frame, self)
         self.waveform_timeline = getattr(self.audio_preview, 'waveform_timeline', None)
         self._root_layout.addWidget(self.audio_preview, 0)
+        # The player's Recording switch: Clean shows the whole recording while it is on, else the story
+        self._clean_recording = bool(getattr(self.audio_preview, 'recording_mode', False))
+        if hasattr(self.audio_preview, 'recording_mode_changed'):
+            self.audio_preview.recording_mode_changed.connect(self._on_recording_mode)
         self._main_h_splitter.splitterMoved.connect(lambda *_: self.audio_preview.update_seek_margins())
 
         self.setCentralWidget(self._root_frame)
@@ -890,38 +940,81 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
     def _build_inspector_tabs(self):
         lay = self._panel_right.layout()
-        lay.setContentsMargins(config.S(8), config.S(8), config.S(10), 0)
+        from gui.components.corner_actions import reserved_height
+        # the top-right corner holds Home / Settings: the inspector starts one line lower
+        lay.setContentsMargins(config.S(8), reserved_height(), config.S(10), 0)
         lay.setSpacing(config.S(8))
         bar = QFrame(self._panel_right)
         bar.setObjectName("InspectorTabs")
         bar.setStyleSheet(f"""
-            QFrame#InspectorTabs {{ background-color: #262626; border-radius: {config.S(10)}px; }}
-            QPushButton#InspTab {{ background: transparent; color: #9a9a9a; border: none; border-radius: {config.S(7)}px;
-                padding: {config.S(5)}px {config.S(3)}px; font-size: {config.FS(8.5)}pt; }}
-            QPushButton#InspTab:hover {{ color: #ffffff; }}
-            QPushButton#InspTab:checked {{ background: #383838; color: #ffffff; font-weight: bold; }}
+            QFrame#InspectorTabs {{ background-color: #222222; border: 1px solid #303030; border-radius: {config.S(12)}px; }}
+            QPushButton#InspTab {{ background: transparent; color: #a3a3a3; border: none; border-radius: {config.S(9)}px;
+                padding: {config.S(7)}px {config.S(8)}px; font-size: {config.FS(9)}pt; font-weight: 500; }}
+            QPushButton#InspTab:hover {{ color: #ffffff; background: #2a2a2a; }}
+            QPushButton#InspTab:checked {{ background: #333333; color: #ffffff; font-weight: bold; }}
             QPushButton#InspClose {{ background: transparent; color: #8a8a8a; border: none; font-size: {config.FS(11)}pt;
                 padding: 0 {config.S(4)}px; }}
             QPushButton#InspClose:hover {{ color: #ffffff; }}
         """)
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(config.S(3), config.S(3), config.S(3), config.S(3))
-        row.setSpacing(config.S(2))
+        from PySide6.QtWidgets import QGridLayout as _QGL
+        grid = _QGL(bar)
+        grid.setContentsMargins(config.S(3), config.S(3), config.S(3), config.S(3))
+        grid.setHorizontalSpacing(config.S(2))
+        grid.setVerticalSpacing(config.S(2))
         self._inspector_tabs = {}
+        # The selected tab is bold: size every tab for its bold label, or "Markers" gets clipped
+        from PySide6.QtGui import QFont as _QF, QFontMetrics as _QFM
+        _tab_font = _QF(self.font())
+        _tab_font.setPointSize(config.FS(9))
+        _tab_font.setBold(True)
+        _tab_fm = _QFM(_tab_font)
+        tabs = []
         for key, label in self._INSPECTOR_TABS:
             b = QPushButton(self.txt(label), bar)
             b.setObjectName("InspTab")
+            b.setMinimumWidth(_tab_fm.horizontalAdvance(self.txt(label)) + 2 * config.S(8) + config.S(2))
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=key: self._open_activity(k))
-            row.addWidget(b, 1)
+            tabs.append(b)
             self._inspector_tabs[key] = b
         close = QPushButton("\u00d7", bar)
         close.setObjectName("InspClose")
         close.setCursor(Qt.PointingHandCursor)
         close.setToolTip(self.txt("insp_close"))
         close.clicked.connect(self._close_inspector)
-        row.addWidget(close)
+
+        # The current step's tabs (see _STEP_TABS) in one row when the panel is wide enough, else
+        # wrapped into rows of three (or two)
+        def _place(width, force=False):
+            shown = [b for b in tabs if not b.property("step_hidden")]
+            spare = width - close.sizeHint().width() - config.S(12)
+            n = len(shown)
+            cols = next((c for c in (n, 3, 2) if c and
+                         max(sum(b.minimumWidth() for b in shown[i:i + c]) for i in range(0, n, c))
+                         + (c - 1) * config.S(2) <= spare), 2)
+            key = (cols, tuple(id(b) for b in shown))
+            if getattr(bar, '_layout_key', None) == key and not force:
+                return
+            bar._layout_key = key
+            for b in tabs + [close]:
+                grid.removeWidget(b)
+            for b in tabs:
+                b.setVisible(b in shown)
+            for i, b in enumerate(shown):
+                grid.addWidget(b, i // cols, i % cols)
+            for c in range(8):
+                grid.setColumnStretch(c, 1 if c < cols else 0)
+            grid.addWidget(close, 0, cols, Qt.AlignTop)
+
+        _orig_resize = bar.resizeEvent
+
+        def _bar_resize(e, _orig=_orig_resize):
+            _place(e.size().width())
+            _orig(e)
+        bar.resizeEvent = _bar_resize
+        self._insp_relayout = lambda: _place(bar.width() or config.S(400))
+        _place(config.S(400))
         lay.addWidget(bar)
         self._inspector_host = QWidget(self._panel_right)
         host = QVBoxLayout(self._inspector_host)
@@ -929,11 +1022,20 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         lay.addWidget(self._inspector_host, 1)
 
     def _sync_inspector_tabs(self, activity_id):
-        for key, b in getattr(self, '_inspector_tabs', {}).items():
+        tabs = getattr(self, '_inspector_tabs', {})
+        for key, b in tabs.items():
             b.setChecked(key == activity_id)
+        b = tabs.get(activity_id)
+        if b is not None and b.property("step_hidden"):
+            b.setProperty("step_hidden", False)
+            relayout = getattr(self, '_insp_relayout', None)
+            if relayout:
+                relayout()
 
     def _after_side_panel_change(self):
         current_page = self._stack.currentWidget()
+        if current_page is getattr(self, 'home_stack', None):
+            current_page = current_page.currentWidget()  # Home or the set-up form, whichever shows
         if current_page and hasattr(current_page, 'resizeEvent'):
             current_page.resizeEvent(None)
         if hasattr(self, 'audio_preview') and self.audio_preview:
@@ -1535,14 +1637,76 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         marked = sum(1 for i in ids if 0 <= i < len(canvas.words_data) and canvas.words_data[i].get('ai_mark') in ('bad', 'repeat', 'typo'))
         self._show_temporary_status(self.txt("msg_detected_again").format(count=marked))
 
-    def _selection_retranscribe(self, ids):
-        """Transcribe a selected passage again (background), then put the new words in its place."""
-        import copy, threading
+    # ---- fixing a passage's words: transcribe it again (any model) or type them ---------------------
+    _RETR_MODELS = (("Large", "large-v3", "~3.5 GB"), ("Large Turbo", "large-v3-turbo", "~2.5 GB"),
+                    ("Medium", "medium", "~1.5 GB"), ("Small", "small", "~1 GB"))
+
+    def _passage_range(self, ids):
+        """(first, last) word indices of a selected passage, or None when it isn't one stretch of the
+        recording (the Edited view can put two far-apart blocks next to each other)."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data or not ids:
+            return None
+        first, last = min(ids), max(ids)
+        chosen = set(ids)
+        hidden = [canvas.words_data[i] for i in range(first, last + 1)
+                  if i not in chosen and canvas.words_data[i].get('type') != 'silence']
+        # a stumble cut inside a block is fine; words from elsewhere in the interview are not
+        if sum(float(w.get('end', 0)) - float(w.get('start', 0)) for w in hidden) > 2.0:
+            CustomMsgBox(self, config.APP_NAME, self.txt("msg_passage_one_block", "Select words inside one block of "
+                         "the story (or switch to Recording) to fix them."), self.txt("btn_ok")).exec()
+            return None
+        return first, last
+
+    def _current_model_key(self):
+        raw = self._combo_model.text() if hasattr(self, '_combo_model') else 'Medium'
+        if "turbo" in raw.lower():
+            return "large-v3-turbo"
+        k = raw.split()[0].lower() if raw else "medium"
+        return "large-v3" if k == "large" else k
+
+    def _model_downloaded(self, key):
+        prefs = self.engine.load_preferences() or {}
+        dev = str(prefs.get('device', 'auto')).upper()
+        try:
+            use_mlx = self.engine.use_mlx_for("GPU" if dev in ("AUTO", "GPU") else "CPU")
+            return self.engine.check_model_exists(key, use_mlx)
+        except Exception:
+            return False
+
+    def _fill_retranscribe_menu(self, menu, ids):
+        """Selection menu > Transcribe again > one model each (current one first)."""
+        cur = self._current_model_key()
+        models = sorted(self._RETR_MODELS, key=lambda m: m[1] != cur)
+        for name, key, size in models:
+            if key == cur:
+                note = self.txt("retr_model_current", "current")
+            elif self._model_downloaded(key):
+                note = self.txt("retr_model_ready", "downloaded")
+            else:
+                note = self.txt("retr_model_download", "downloads {size} first").format(size=size)
+            menu.addAction(f"{name}  ·  {note}", lambda n=name: self._selection_retranscribe(ids, model=n))
+
+    def _set_passage_busy(self, ids, text):
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None:
+            return
+        canvas._busy_ids = set(ids) if ids else None
+        canvas._busy_text = text
+        canvas.update()
+
+    def _selection_retranscribe(self, ids, model=None):
+        """Transcribe a selected passage again (background), then put the new words in its place.
+        model: a model name ("Large", "Medium"...); default the one chosen for the transcript."""
+        import copy, threading, time as _time
         canvas = getattr(self, 'text_canvas', None)
         if canvas is None or not canvas.words_data or not ids or getattr(self, '_retranscribe_job', None):
             return
+        rng = self._passage_range(ids)
+        if rng is None:
+            return
+        first, last = rng
         words = canvas.words_data
-        first, last = min(ids), max(ids)
         audio_path = words[0].get("meta_audio_path") or getattr(self.engine, 'last_audio_path', None)
         if not audio_path or not os.path.exists(audio_path):
             CustomMsgBox(self, config.APP_NAME, self.txt("msg_speaker_no_audio"), self.txt("btn_ok")).exec()
@@ -1551,20 +1715,34 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if not spoken:
             return
         t0, t1 = float(spoken[0].get('start', 0.0)), float(spoken[-1].get('end', 0.0))
+        prev_w = next((w for w in reversed(words[:first]) if w.get('type') != 'silence'), None)
+        next_w = next((w for w in words[last + 1:] if w.get('type') != 'silence'), None)
+        bounds = (float(prev_w['end']) if prev_w else t0, float(next_w['start']) if next_w else t1)
+        before_words = [w.get('text', '') for w in words[max(0, first - 120):first] if w.get('type') != 'silence']
         raw_lang = self._combo_lang.text() if hasattr(self, '_combo_lang') else 'Auto'
         lang_code = next((c for c, n in config.SUPPORTED_LANGUAGES.items() if n.lower() == raw_lang.lower()), "auto")
         prefs = self.engine.load_preferences() or {}
-        settings = {"lang": lang_code, "model": self._combo_model.text() if hasattr(self, '_combo_model') else prefs.get('model', 'Medium'),
-                    "device": prefs.get('device', 'Auto')}
+        model_name = model or (self._combo_model.text() if hasattr(self, '_combo_model') else prefs.get('model', 'Medium'))
+        shown = model or model_name.split(" (")[0]
+        settings = {"lang": lang_code, "model": model_name, "device": prefs.get('device', 'Auto')}
         rh = getattr(self.engine, 'resolve_handler', None)
         fps = getattr(rh, 'fps', None) or 24.0
-        job = {"done": False, "words": None, "error": None}
+        job = {"done": False, "words": None, "error": None, "t": _time.time(),
+               "for_words": canvas.words_data}       # the transcript it was started on (identity)
         self._retranscribe_job = job
-        self._show_temporary_status(self.txt("msg_retranscribe_running"), 120000)
+        busy_ids = list(range(first, last + 1))
+
+        def _busy_text():
+            secs = int(_time.time() - job["t"])
+            return self.txt("retr_busy", "Transcribing again with {model}… {time}").format(
+                model=shown, time=f"{secs // 60}:{secs % 60:02d}")
+        self._set_passage_busy(busy_ids, _busy_text())
+        self._show_temporary_status(_busy_text(), 600000)
 
         def _work():
             try:
-                job["words"] = self.engine.transcribe_passage(audio_path, t0, t1, settings, fps)
+                job["words"] = self.engine.transcribe_passage(audio_path, t0, t1, settings, fps,
+                                                              context_text=" ".join(before_words), bounds=bounds)
             except Exception as e:
                 job["error"] = str(e)
             job["done"] = True
@@ -1572,18 +1750,69 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
         def _poll():
             if not job["done"]:
-                QTimer.singleShot(300, _poll)
+                self._set_passage_busy(busy_ids, _busy_text())
+                if hasattr(self, 'lbl_analysis_duration'):
+                    self.lbl_analysis_duration.setText(_busy_text())
+                QTimer.singleShot(100, _poll)
                 return
             self._retranscribe_job = None
-            if job["error"] or job["words"] is None:
+            self._set_passage_busy(None, "")
+            if canvas.words_data is not job["for_words"]:
+                # another timeline was opened (or the words changed) meanwhile: its positions don't match anymore
+                from osdoc import log_info
+                log_info("Transcribe again: the transcript changed meanwhile; result dropped")
+                self._show_temporary_status(self.txt("retr_dropped", "Transcribe again was stopped: the transcript "
+                                                     "changed while it ran. Nothing was replaced."), 8000)
+                return
+            if job["error"] or not job["words"]:
                 from osdoc import log_error
-                log_error(f"Transcribe again failed: {job['error']}")
+                log_error(f"Transcribe again failed: {job['error'] or 'no words heard'}")
                 self._show_temporary_status(self.txt("msg_retranscribe_failed"))
                 return
-            import algorithms
+            before = ' '.join(w.get('text', '') for w in spoken)
+            after = ' '.join(w.get('text', '') for w in job["words"])
+            if before.split() == after.split():
+                self._show_temporary_status(self.txt("msg_retranscribe_same"))
+                box = CustomMsgBox(self, self.txt("retr_same_title", "Same words again"),
+                                   self.txt("retr_same_msg", "{model} heard the same words again:\n“{text}”\n\n"
+                                            "If that's not what is said, type the right words.").format(model=shown, text=after),
+                                   self.txt("menu_sel_correct", "Correct the words…"), self.txt("btn_close", "Close"))
+                if box.exec():
+                    self._selection_correct(busy_ids)
+                return
+            # Whisper can also get it worse: show what it heard and let the user choose
+            box = CustomMsgBox(self, self.txt("retr_result_title", "{model} heard").format(model=shown),
+                               self.txt("retr_result_msg", "Before: “{before}”\nNow: “{after}”").format(
+                                   before=before, after=after),
+                               self.txt("retr_use", "Use it"), self.txt("menu_sel_correct", "Correct the words…"),
+                               self.txt("retr_keep", "Keep the old words"))   # Esc = keep
+            choice = box.exec()
+            if choice == 0:
+                self._selection_correct(busy_ids)
+                return
+            if choice != 1:
+                return
             old = copy.deepcopy(canvas.words_data)
             cur = canvas.words_data
-            new_list = cur[:first] + job["words"] + cur[last + 1:]
+            # the new words can reach into the free time around the passage: the silences there step back
+            n0 = min(float(w.get('start', 0)) for w in job["words"])
+            n1 = max(float(w.get('end', 0)) for w in job["words"])
+
+            def _trim(ws):
+                kept = []
+                for w in ws:
+                    if w.get('type') == 'silence' and float(w.get('start', 0)) < n1 and float(w.get('end', 0)) > n0:
+                        w = dict(w)
+                        if float(w['start']) >= n0 and float(w['end']) <= n1:
+                            continue                       # covered by the new words
+                        if float(w['start']) < n0:
+                            w['end'] = n0
+                        else:
+                            w['start'] = n1
+                    kept.append(w)
+                return kept
+            head, tail = cur[:first], cur[last + 1:]
+            new_list = head[:-3] + _trim(head[-3:]) + job["words"] + _trim(tail[:3]) + tail[3:]
             for k in ('meta_audio_path', 'meta_global_silence'):  # file-level info lives on the first word
                 if k in cur[0] and k not in new_list[0]:
                     new_list[0][k] = cur[0][k]
@@ -1594,13 +1823,78 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             canvas.load_data(new_list)  # snapshots the AI marks of the new words
             if hasattr(self, 'undo_manager'):
                 self.undo_manager.push({"type": "words", "words": old, "changes": {"_": 1}})
+            self._words_changed()
             self._refresh_cut_preview()
             self._refresh_detection_counts()
-            before = ' '.join(w.get('text', '') for w in spoken)
-            after = ' '.join(w.get('text', '') for w in job["words"])
-            self._show_temporary_status(self.txt("msg_retranscribe_done").format(
-                before=len(spoken), after=len(job["words"])) if before != after else self.txt("msg_retranscribe_same"))
-        QTimer.singleShot(300, _poll)
+            self._show_temporary_status(self.txt("retr_done_text", "Now: “{text}” ({key} undoes)").format(
+                text=after if len(after) < 90 else after[:87] + "…", key=_UNDO_KEY_TEXT), 12000)
+        QTimer.singleShot(100, _poll)
+
+    def _words_changed(self):
+        """The transcript's words changed (Correct the words, Transcribe again): the story's lines, its saved
+        board and the cut review follow (story_workspace.retext_all; no undo step of its own)."""
+        story = getattr(self, 'story_view', None)
+        if story is not None and hasattr(story, 'retext_all'):
+            try:
+                story.retext_all()
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"words changed: story text: {e}")
+
+    def _selection_correct(self, ids):
+        """Selection menu > Correct the words…: the user types what is said; the new words take the
+        passage's place in the recording (word_fix: unchanged words keep their timing). One undo step."""
+        import copy
+        import word_fix
+        from PySide6.QtWidgets import QPlainTextEdit
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data or not ids:
+            return
+        rng = self._passage_range(ids)
+        if rng is None:
+            return
+        first, last = rng
+        segment = canvas.words_data[first:last + 1]
+        if not any(w.get('type') != 'silence' for w in segment):
+            return
+        box_text = QPlainTextEdit()
+        box_text.setPlainText(word_fix.spoken_text(segment))
+        box_text.setFixedHeight(config.S(96))
+        box_text.setStyleSheet(f"QPlainTextEdit {{ background: {config.BTN_GHOST_BG}; color: {config.FG_COLOR}; "
+                               f"border: 1px solid {config.BTN_GHOST_ACTIVE}; border-radius: {config.S(6)}px; "
+                               f"padding: {config.S(6)}px; font-size: {config.FS(11)}pt; }}")
+        box_text.selectAll()
+        dlg = CustomMsgBox(self, self.txt("dlg_correct_title", "Correct the words"),
+                           self.txt("dlg_correct_msg", "Type what is actually said. Only the text changes: the audio "
+                                    "and the cuts stay as they are. Words you keep keep their timing; new words share "
+                                    "the time of the ones they replace."),
+                           self.txt("btn_correct_apply", "Apply"), self.txt("btn_cancel", "Cancel"), extra_widget=box_text)
+        QTimer.singleShot(0, box_text.setFocus)
+        if not dlg.exec():
+            return
+        text = box_text.toPlainText().strip()
+        if text.split() == word_fix.spoken_text(segment).split():
+            return
+        try:
+            new_seg = word_fix.correct_passage(segment, text)
+        except ValueError:
+            self._show_temporary_status(self.txt("msg_correct_empty", "Type at least one word."))
+            return
+        old = copy.deepcopy(canvas.words_data)
+        cur = canvas.words_data
+        new_list = cur[:first] + new_seg + cur[last + 1:]
+        for k in ('meta_audio_path', 'meta_global_silence', 'meta_language', 'meta_speakers'):
+            if k in cur[0] and k not in new_list[0]:
+                new_list[0][k] = cur[0][k]
+        for i, w in enumerate(new_list):
+            w['id'] = i
+        canvas.load_data(new_list)
+        if hasattr(self, 'undo_manager'):
+            self.undo_manager.push({"type": "words", "words": old, "changes": {"_": 1}})
+        self._words_changed()
+        self._refresh_cut_preview()
+        self._refresh_detection_counts()
+        self._show_temporary_status(self.txt("msg_correct_done", "Words corrected ({key} undoes)").format(key=_UNDO_KEY_TEXT), 8000)
 
     def _selection_play(self, ids):
         canvas = getattr(self, 'text_canvas', None)
@@ -1647,27 +1941,19 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         if tl_name is None and hasattr(self, 'combo_tl_0'):
             tl_name = self.combo_tl_0.text()
         saves, proj = self.engine.os_doc.get_saves_folder(), self.engine._get_resolve_project_name()
-        found = timeline_store.find(saves, proj, tl_name)
-        self._saved_edit_entry = None
-        from_source = None
-        if not found:
-            # A timeline StoryCraft made: open that edit (its marks, speakers and story board)
-            from handlers import edit_library
-            entry = edit_library.find_edit(saves, proj, tl_name)
-            if entry:
-                self._saved_edit_entry = entry
-                found = (entry["state_path"], entry.get("created") or os.path.getmtime(entry["state_path"]))
-            else:
-                # An older edit (before the edits list): its source timeline's transcript
-                src = self._source_of_edit_name(tl_name)
-                found = timeline_store.find(saves, proj, src) if src else None
-                from_source = src if found else None
+        # An edit StoryCraft made opens inside its project (its source, marks, speakers, story board),
+        # even when the edit timeline was also transcribed on its own: see resolve_saved_timeline
+        how = self.resolve_saved_timeline(saves, proj, tl_name)
+        self._saved_edit_entry = how.get("entry")
+        self._saved_chapter_tl = how.get("chapter_tl")
+        from_source = how.get("source") if how.get("kind") == "chapter" else None
+        found = (how["path"], how["when"]) if how.get("path") else None
         self._saved_transcript_path = found[0] if found else None
         self._saved_transcript_current = bool(found) and (
             bool(self._saved_edit_entry or from_source) or self._saved_matches_timeline(found[0], tl_name))
         if found:
             when = timeline_store.when_text(found[1])
-            if self._saved_edit_entry:
+            if self._saved_edit_entry or self._saved_chapter_tl:
                 label = self.txt("btn_open_saved_edit").format(when=when)
             elif from_source:
                 label = self.txt("btn_open_saved_source").format(name=from_source)
@@ -1726,6 +2012,55 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             return
         path = getattr(self, '_saved_transcript_path', None)
         if path and os.path.exists(path):
+            self._pending_chapter_tl = getattr(self, '_saved_chapter_tl', None)
+            self._on_import_project(override_path=path)
+
+    @staticmethod
+    def _save_chapter_names(path):
+        """{timeline name: chapter name} of the edits kept as chapters in a saved transcript."""
+        import json
+        try:
+            with open(path, encoding='utf-8') as f:
+                chapters = json.load(f).get("chapters") or []
+            return {ch.get("tl_name"): ch.get("name") for ch in chapters if ch.get("tl_name")}
+        except Exception:
+            return {}
+
+    def resolve_saved_timeline(self, saves, project, tl_name):
+        """How to open a timeline that has saved work, as part of its project when it is an edit:
+          1. "library": an edit in the edits library (state with its source, marks, story board)
+          2. "chapter": an older edit kept as a chapter of its source timeline's transcript
+          3. "own":     the timeline's own transcript (also an edit timeline transcribed by itself)
+          4. "chapter" without the chapter: the source's transcript (an edit from before the library)
+        Returns {"kind", "path", "when", "entry", "chapter_tl", "source"} or {} when nothing is saved."""
+        from handlers import edit_library, timeline_store
+        if not tl_name:
+            return {}
+        entry = edit_library.find_edit(saves, project, tl_name)
+        if entry:
+            return {"kind": "library", "path": entry["state_path"], "entry": entry,
+                    "when": entry.get("created") or os.path.getmtime(entry["state_path"])}
+        src = self._source_of_edit_name(tl_name)
+        src_found = timeline_store.find(saves, project, src) if src else None
+        if src_found and tl_name in self._save_chapter_names(src_found[0]):
+            return {"kind": "chapter", "path": src_found[0], "when": src_found[1], "chapter_tl": tl_name, "source": src}
+        own = timeline_store.find(saves, project, tl_name)
+        if own:
+            return {"kind": "own", "path": own[0], "when": own[1]}
+        if src_found:
+            return {"kind": "chapter", "path": src_found[0], "when": src_found[1], "source": src}
+        return {}
+
+    def open_saved_timeline(self, saves, project, tl_name, fallback_path=None, chapter_tl=None):
+        """Open saved work from Home: an edit inside its project (see resolve_saved_timeline).
+        chapter_tl: show that timeline's chapter once loaded (Home's "Original" chip)."""
+        how = self.resolve_saved_timeline(saves, project, tl_name)
+        if how.get("kind") == "library":
+            self._load_edit(how["entry"])
+            return
+        path = how.get("path") or fallback_path
+        if path and os.path.exists(path):
+            self._pending_chapter_tl = how.get("chapter_tl") or chapter_tl
             self._on_import_project(override_path=path)
 
     # ── Edits library: every edit cut from the same source timeline ──────────────────────────
@@ -2236,6 +2571,17 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         count_pref = (self.engine.load_preferences() or {}).get('speaker_count')
         if auto and count_pref == 1:
             return  # one voice: nothing to find
+        combo_n = getattr(self, 'cmb_spk_count', None)
+        if not auto and combo_n is not None and combo_n.currentData() == 1:
+            # One voice chosen: everyone is Speaker 1 straight away (one undo step), nothing to analyse
+            def _one(words):
+                for w in words:
+                    if SM.is_spoken(w):
+                        w['spk'] = 1
+                SM.put(words, [SM.make(1, self._spk_name_fmt().format(n=1), "main")])
+            self._speaker_edit(_one)
+            self._show_temporary_status(self.txt("msg_spk_one", "One speaker: everything is Speaker 1."), 5000)
+            return
         audio_path = canvas.words_data[0].get("meta_audio_path") or getattr(self.engine, 'last_audio_path', None)
         if not audio_path or not os.path.exists(audio_path):
             if not auto:
@@ -2464,6 +2810,7 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         self._show_temporary_status(self.txt("msg_stammers_found").format(count=n))
 
     def _refresh_detection_counts(self):
+        self._refresh_voice_found()
         labels = getattr(self, 'det_counts', None)
         canvas = getattr(self, 'text_canvas', None)
         if not labels or canvas is None:
@@ -2633,6 +2980,8 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             chip.clicked.connect(lambda _=False, b=rb: b.setChecked(True))
             rb.toggled.connect(lambda on, c=chip: c.setChecked(on))
             lay.addWidget(chip)
+            chip.ensurePolished()  # the strip's stylesheet (padding) counts in the size
+            chip.setMinimumWidth(chip.sizeHint().width())  # full label, never squeezed
             self._mark_chips.append(chip)
 
     def _on_analyze_standalone(self):
@@ -2783,6 +3132,9 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             "current_chapter_idx": getattr(self, '_current_chapter_idx', -1),
             "script_content": getattr(self, 'text_script', None).toPlainText() if hasattr(self, 'text_script') else "",
             "transcription_source": getattr(self, '_transcription_source', None),
+            # The project folder it was opened from: autosave writes there, not into whichever
+            # project Resolve has open (opening another project's timeline from Home overwrote it)
+            "project_dir": getattr(self, '_loaded_project_dir', None),
             "sbs_cache":      None,
             "analysis_time":  analysis_time
         }
@@ -3106,10 +3458,15 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         return algorithms.cut_review_text(clips, sentences, story.get("duration") if not edit else None, target, level)
 
     def _on_review_cuts(self):
+        """The story board's Review cuts: open the Review screen (it can copy the review for an AI)."""
         text = self._cut_review()
         if not text:
             self._show_temporary_status(self.txt("msg_cut_review_empty"))
             return
+        if getattr(self, '_stack', None) is not None:
+            self.show_review()
+            if self._stack.currentIndex() == 3:
+                return
         QApplication.clipboard().setText(text)
         n = text.count("\nCut ")
         self._show_temporary_status(self.txt("msg_cut_review_copied").format(cuts=n))
@@ -3152,11 +3509,311 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         self._show_temporary_status(self.txt("msg_transcript_exported"))
 
     # ── Story mode (issue #8): import an AI edit and assemble it in its order ──
+    def _voice_patch_dir(self):
+        """<saves>/voice_patches/<project>/<timeline>: the open transcript's patches (voice_view)."""
+        from handlers import timeline_store
+        snap = getattr(self, '_transcription_source', None) or {}
+        return os.path.join(self.engine.os_doc.get_saves_folder(), "voice_patches", self._story_project(),
+                            timeline_store._safe(snap.get("timeline_name") or "Timeline"))
+
+    def _voice_patch_map(self):
+        """{id: {"length": ...}} of the voice patches in the story (accepted.json)."""
+        try:
+            from voice_patch.edit import load_accepted_map
+            return load_accepted_map(self._voice_patch_dir())
+        except Exception:
+            return {}
+
+    def _set_voice_patches(self, m):
+        """Put exactly these patches in the story (others out): the list, and the transcript's words (a
+        rewrite's new words come and go with its patch). Works whether or not Voice patch was opened."""
+        import copy
+        vv = getattr(self, 'voice_view', None)
+        if vv is not None and hasattr(vv, '_set_accepted'):
+            vv._set_accepted(copy.deepcopy(m))
+            return
+        from voice_patch.edit import save_accepted
+        from voice_patch import transcript as VT
+        d = self._voice_patch_dir()
+        save_accepted(d, copy.deepcopy(m))
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return
+        try:
+            new, changed = VT.sync(canvas.words_data, d, set(m), None)
+        except Exception as e:
+            from osdoc import log_error
+            log_error(f"voice patches: transcript sync failed: {e}")
+            return
+        if not changed:
+            return
+        canvas.load_data(new)
+        for fn in ('_refresh_cut_preview', '_refresh_detection_counts'):
+            if hasattr(self, fn):
+                getattr(self, fn)()
+        board = getattr(self, 'story_board', None)
+        if board is not None and getattr(board, 'sentences', None) and VT.refresh_board_text(board.sentences, new):
+            board._sync_story()
+        sv = getattr(self, 'story_view', None)
+        if sv is not None:
+            try:
+                sv.refresh(force=True)
+            except Exception:
+                pass
+
+    def _patch_label(self, p):
+        """The story's name for a patch's place: its sentence id(s), e.g. 'S011' or 'S010–S012'."""
+        try:
+            a, b = float(p["a"]), float(p["b"])
+            sents = getattr(getattr(self, 'story_board', None), 'sentences', None) or []
+            if not sents:
+                _, sents = self._build_ai_transcript()
+            ids = [s.get("id") for s in sents
+                   if s.get("id") and float(s.get("src_end", 0)) > a + 0.02 and float(s.get("src_start", 0)) < b - 0.02]
+            if ids:
+                return ids[0] if len(ids) == 1 else f"{ids[0]}–{ids[-1]}"
+        except Exception:
+            pass
+        return f"Patch {p.get('end_id', '')}"
+
+    def _place_voice_patches(self, tl_name, ops, patches):
+        """After Send to Resolve: the accepted voice patches on their own track in the new timeline."""
+        from osdoc import log_info, log_error
+        rh = getattr(self, 'resolve_handler', None)
+        if rh is None or getattr(rh, 'backend', None) != 'native' or getattr(rh, 'project', None) is None:
+            self._show_temporary_status(self.txt("voice_place_bridge", "Voice patches need the direct connection to "
+                                                 "Resolve (Studio, External scripting: Local) to be placed."), 9000)
+            return
+        try:
+            from voice_patch.edit import place_patches
+            tl = rh.project.GetCurrentTimeline()
+            if tl is None or tl.GetName() != tl_name:
+                log_error(f"voice patches: {tl_name} isn't the current timeline")
+                return
+            fps = float(getattr(rh, 'fps', None) or 24.0)
+            patches = [dict(p, label=self._patch_label(p)) for p in patches]   # media named after the sentences
+            placed, problems = place_patches(rh.project, tl, ops, patches, fps, log=log_info)
+            msg = self.txt("voice_placed", "{n} voice patch(es) placed on their own track; the original words are muted under them.").format(n=placed)
+            if problems:
+                msg += " · " + "; ".join(problems[:2])
+            self._show_temporary_status(msg, 10000)
+        except Exception as e:
+            import traceback
+            log_error(f"voice patches: {e}\n{traceback.format_exc()}")
+            self._show_temporary_status(self.txt("voice_place_failed", "The voice patches couldn't be placed: {err}").format(err=e), 9000)
+
+    def _reset_undo_for_new_transcript(self):
+        self._land_on_story = True   # a transcript that just opened shows its story first (go_to_page)
+        if getattr(self, 'undo_manager', None) is not None:
+            self.undo_manager.clear()
+        board = getattr(self, 'story_board', None)
+        if board is not None:
+            board._undo_last = None
+            board.edge_air = {}  # pause settings belong to the previous transcript's board
+
+    def _update_story_words(self, clips):
+        """The transcript words inside the story (Compose > Original greys out the rest)."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None:
+            return
+        if not clips or not canvas.words_data:
+            canvas._story_ids = None
+        else:
+            spans = sorted((float(c["cut_start"]), float(c["cut_end"])) for c in clips)
+            ids = set()
+            for i, w in enumerate(canvas.words_data):
+                if w.get('type') == 'silence':
+                    continue
+                mid = (float(w.get('start', 0)) + float(w.get('end', 0))) / 2.0
+                if any(a <= mid <= b for a, b in spans):
+                    ids.add(i)
+            canvas._story_ids = ids
+        canvas.update()
+        self._apply_clean_view()
+
+    def _update_story_legend(self):
+        lg = getattr(self, 'story_legend', None)
+        canvas = getattr(self, 'text_canvas', None)
+        if lg is None or canvas is None:
+            return
+        lg.setVisible(getattr(canvas, '_story_ids', None) is not None and not canvas.edit_view
+                      and self._stack.currentIndex() == 2)
+
+    def _selection_story(self, ids, add):
+        """Selection menu (Compose): Add to the story / Leave out of the story. The sentences the
+        passage touches; one undo step (the story board records it)."""
+        import story_edit
+        board = getattr(self, 'story_board', None)
+        canvas = getattr(self, 'text_canvas', None)
+        if board is None or canvas is None or not ids or not getattr(board, 'sentences', None):
+            return
+        spoken = [canvas.words_data[i] for i in sorted(ids) if canvas.words_data[i].get('type') != 'silence']
+        if not spoken:
+            return
+        rng = story_edit.sentences_for_span(board.sentences, float(spoken[0].get('start', 0)),
+                                            float(spoken[-1].get('end', 0)))
+        if rng is None:
+            self._show_temporary_status(self.txt("msg_story_no_sentence", "Those words aren't in a sentence the story can use (cut in Clean up?)."))
+            return
+        a, b = rng
+        edit, unused = board.edit_blocks(), board.unused_blocks()
+        if add:
+            new_edit, new_unused = story_edit.include(edit, unused, a, b)
+            changed = new_edit != [tuple(x) for x in edit]
+        else:
+            new_edit, new_unused, changed = story_edit.exclude(edit, unused, a, b)
+        if not changed:
+            self._show_temporary_status(self.txt("msg_story_already_in" if add else "msg_story_already_out",
+                                                 "Already in the story." if add else "Not in the story."))
+            return
+        board.load(board.sentences, new_edit, new_unused)
+        ids_txt = board.sentences[a].get("id", a) + ("" if a == b else "–" + str(board.sentences[b].get("id", b)))
+        self._show_temporary_status((self.txt("msg_story_added", "Added {ids} to the story ({key} undoes)") if add else
+                                     self.txt("msg_story_left_out", "Left {ids} out of the story ({key} undoes)")).format(
+                                         ids=ids_txt, key=_UNDO_KEY_TEXT), 8000)
+
+    def _selection_voice_patch(self, ids):
+        """Selection menu > Send to voice patch: the words get the To voice patch marker (only unmarked words,
+        so the edit doesn't change; one undo step) and Voice patches opens on that passage."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data or not ids:
+            return
+        m = self._ensure_voice_marker(force=True)
+        if m is None:
+            self._show_temporary_status(self.txt("msg_voice_no_color", "No colour is free for the To voice patch "
+                                                 "marker: delete a custom marker in Settings."))
+            return
+        status = f"custom_{m['color']}"
+        words = canvas.words_data
+        ok = [i for i in sorted(ids) if words[i].get('type') == 'word'
+              and words[i].get('status') in (None, '', 'normal', status)]
+        if not ok:
+            self._show_temporary_status(self.txt("msg_voice_send_cut", "Those words are cut or marked: clear their "
+                                                 "marks first to patch them."))
+            return
+
+        def _mark(w):
+            w['status'] = status
+            w['manual_status'] = status
+            w['is_auto'] = False
+            w['selected'] = True
+            w['overlay_suppressed'] = True
+        todo = [i for i in ok if words[i].get('status') != status]
+        if todo:
+            self._mark_words(todo, _mark)
+        self._refresh_voice_found()
+        self.show_voice()
+        self.voice_view.select_passage_ids(ok)
+        skipped = sum(1 for i in ids if words[i].get('type') == 'word') - len(ok)
+        if skipped > 0:
+            self._show_temporary_status(self.txt("msg_voice_send_skipped", "{count} words already marked (cut or "
+                                                 "another mark) were left out of the passage.").format(count=skipped), 8000)
+
+    def _after_undo_redo(self, action=None, undone=True):
+        """An undo/redo can change the story: the open Review screen shows the restored cuts. The undo history
+        is shared by every page, so say what was undone (and where), wherever the user is."""
+        view = getattr(self, 'review_view', None)
+        if view is not None and self._stack.currentIndex() == 3:
+            view.refresh()
+        story = getattr(self, 'story_view', None)
+        if action is not None and action.get('type') == 'words' and story is not None and hasattr(story, 'retext_all'):
+            try:
+                story.retext_all()   # a word correction undone/redone: the story's lines follow the transcript
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"retext after undo: {e}")
+        if action is not None and getattr(self, 'toast', None) is not None:
+            what = self._undo_what(action)
+            tpl = (self.txt("undo_done", "Undone: {what}") if undone else self.txt("redo_done", "Redone: {what}"))
+            self.toast.show_text(tpl.format(what=what), 4000)
+
+    def _undo_what(self, action):
+        """A few words for what an undo step changes (and on which page)."""
+        t = action.get('type')
+        if t in ('paint', 'words'):
+            return self.txt("undo_what_marks", "marks or words in Clean")
+        if t == 'speakers':
+            return self.txt("undo_what_speakers", "speakers")
+        fn = action.get('apply')
+        owner = type(getattr(fn, '__self__', None)).__name__ if fn is not None else ""
+        name = getattr(fn, '__name__', "")
+        if fn is not None and getattr(fn, '__self__', None) is getattr(self, 'story_board', object()):
+            return self.txt("undo_what_story", "a change to the story")
+        if owner == 'VoiceView':
+            return self.txt("undo_what_voice", "a voice patch in or out of the story")
+        if 'pause' in name:
+            return self.txt("undo_what_pauses", "the pause setting")
+        return self.txt("undo_what_change", "the last change")
+
+    def open_review_cut(self, n):
+        """Open Review on cut n (clicked in the transcript or on the waveform)."""
+        self.show_review()
+        view = getattr(self, 'review_view', None)
+        if view is not None and self._stack.currentIndex() == 3 and hasattr(view, 'open_cut'):
+            view.open_cut(n)
+
+    def _story_project(self):
+        """Folder name of the project this transcript belongs to: where it was opened from
+        (saves/timelines/<project>/...), else the Resolve project it was transcribed in."""
+        from handlers import timeline_store
+        loaded = getattr(self, '_loaded_project_dir', None)
+        if loaded:
+            return loaded
+        try:
+            return timeline_store._safe(self.engine._get_resolve_project_name() or "No project")
+        except Exception:
+            return "No project"
+
     def _ai_story_map_path(self):
+        """<saves>/ai_story/<project>/<timeline>.json (its board: .board.json next to it).
+        Before, the project wasn't in the path, so two projects with a "Timeline 1" shared one story;
+        such an old file moves here only when its sentences belong to this transcript."""
         snap = getattr(self, '_transcription_source', None) or {}
         name = snap.get('timeline_name') or snap.get('source_file') or "Transcript"
         safe = "".join(c for c in os.path.basename(str(name)) if c.isalnum() or c in ' -_').strip() or "Transcript"
-        return os.path.join(self.engine.os_doc.get_saves_folder(), "ai_story", f"{safe}.json")
+        root = os.path.join(self.engine.os_doc.get_saves_folder(), "ai_story")
+        path = os.path.join(root, self._story_project(), f"{safe}.json")
+        legacy = os.path.join(root, f"{safe}.json")
+        if not os.path.exists(path) and os.path.isfile(legacy) and self._legacy_story_matches(legacy):
+            import shutil
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                for src, dst in ((legacy, path), (legacy[:-5] + ".board.json", path[:-5] + ".board.json")):
+                    if os.path.isfile(src):
+                        shutil.move(src, dst)
+                from osdoc import log_info
+                log_info(f"Story of '{safe}' moved to its project folder ({self._story_project()})")
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"Moving the story of '{safe}': {e}")
+        return path
+
+    def _legacy_story_matches(self, path):
+        """True when an old (project-less) story file was made from the open transcript: its
+        sentences fall inside the recording and their first words are the transcript's there."""
+        import json
+        import re as _re
+        canvas = getattr(self, 'text_canvas', None)
+        words = [w for w in (getattr(canvas, 'words_data', None) or []) if w.get('type') == 'word' and w.get('start') is not None]
+        try:
+            with open(path, encoding='utf-8') as f:
+                sentences = json.load(f).get("sentences") or []
+        except Exception:
+            return False
+        if not words or not sentences:
+            return False
+        end = max(float(w.get('end', 0) or 0) for w in words)
+        if max(float(s.get('cut_end', 0) or 0) for s in sentences) > end + 2.0:
+            return False
+        norm = lambda t: _re.sub(r"[^\w']+", "", str(t).lower())
+        picks = sentences[:: max(1, len(sentences) // 6)][:6]
+        hits = 0
+        for s in picks:
+            t0, t1 = float(s.get('cut_start', 0) or 0) - 0.6, float(s.get('cut_end', 0) or 0) + 0.6
+            near = " ".join(norm(w.get('text')) for w in words if t0 <= float(w['start']) <= t1)
+            first = [norm(x) for x in str(s.get('text', '')).split()[:2] if norm(x)]
+            hits += bool(first) and all(f in near for f in first)
+        return hits >= max(1, int(len(picks) * 0.8))
 
     def _build_story_from_script(self):
         """Story board in script order: each script line's kept take, off-script passages left out."""
@@ -3239,6 +3896,8 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             self._story = dlg.result_story
             if getattr(self, 'story_board', None) is not None:
                 self.story_board.load_ai_story(sentences, dlg.result_story)  # also sets the story
+                try: self._story_version_auto("ai")  # Story versions: keep the imported AI edit
+                except Exception: pass
             else:
                 self._update_story_banner()
                 self._refresh_cut_preview()
@@ -3281,6 +3940,12 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
     def _show_temporary_status(self, msg, duration_ms=5000):
         """Shows a temporary message on lbl_analysis_duration, restoring previous text after timeout."""
+        toast = getattr(self, 'toast', None)
+        if toast is not None and msg:
+            try:
+                toast.show_text(msg, max(2500, min(int(duration_ms or 5000), 8000)))
+            except RuntimeError:
+                pass
         if not hasattr(self, 'lbl_analysis_duration'):
             return
             
@@ -3333,6 +3998,15 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             if not path: return
 
             self._pre_import_stack_idx = self._stack.currentIndex() if hasattr(self, '_stack') else 0
+            # Which project this transcript belongs to (its story files are kept per project)
+            _saves = os.path.abspath(self.engine.os_doc.get_saves_folder())
+            _rel = os.path.relpath(os.path.abspath(path), _saves).split(os.sep)
+            # saves/timelines/<project>/<timeline>.json  or  saves/edits/<project>/<source>/<edit>.json
+            self._loaded_project_dir = (_rel[1] if len(_rel) >= 3 and _rel[0] in ("timelines", "edits")
+                                        and not _rel[0].startswith("..") else None)
+            self._ai_sentences = None
+            self._reset_story_for_new_transcript()
+            self._reset_undo_for_new_transcript()
 
             # Switch to processing page with indeterminate liquid progress bar (-1)
             import_txt = self.txt("status_importing_project") if hasattr(self, 'txt') else "Loading project..."
@@ -3384,6 +4058,112 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             self._apply_imported_project(state, meta)
         else:
             QTimer.singleShot(int(wait * 1000), lambda: self._apply_imported_project(state, meta))
+
+    def start_fresh(self, project_folder, timeline, confirm=True):
+        """Put a timeline's saved StoryCraft work in the archive (handlers/fresh_start.py), so it doesn't come
+        back when the timeline is opened or transcribed again. Returns True when done."""
+        from handlers import fresh_start
+        saves = self.engine.os_doc.get_saves_folder()
+        info = fresh_start.summary(saves, project_folder, timeline)
+        if not info["paths"]:
+            self._show_temporary_status(self.txt("fresh_nothing", "Nothing saved for “{tl}”: it already starts "
+                                                 "fresh.").format(tl=timeline), 6000)
+            return True
+        if confirm:
+            parts = []
+            if info["transcript"]:
+                parts.append(self.txt("fresh_part_transcript", "the transcript"))
+            if info["story"]:
+                parts.append(self.txt("fresh_part_story", "the story"))
+            if info["versions"]:
+                parts.append(self.txt("fresh_part_versions", "{n} version(s)").format(n=info["versions"]))
+            if info["patches"]:
+                parts.append(self.txt("fresh_part_patches", "{n} voice patch(es)").format(n=info["patches"]))
+            box = CustomMsgBox(self, self.txt("fresh_title", "Start fresh with “{tl}”?").format(tl=timeline),
+                               self.txt("fresh_msg", "StoryCraft puts this timeline's saved work in the archive: {what}. "
+                                        "Nothing in Resolve changes. Then transcribe the timeline again to start "
+                                        "from scratch.").format(what=", ".join(parts)),
+                               self.txt("btn_start_fresh", "Start fresh"), self.txt("btn_cancel", "Cancel"))
+            if not box.exec():
+                return False
+        # The same timeline open right now: leave it first (its story, words and patches in memory)
+        snap = getattr(self, '_transcription_source', None) or {}
+        canvas = getattr(self, 'text_canvas', None)
+        is_open = (snap.get('timeline_name') == timeline and canvas is not None and canvas.words_data
+                   and self._story_project() == project_folder)
+        self._reset_story_for_new_transcript()
+        if is_open:
+            try:
+                ap = getattr(self, 'audio_preview', None)
+                if ap is not None and ap.player.playbackState() == ap.player.PlaybackState.PlayingState:
+                    ap.toggle_play()
+                canvas.load_data([])
+                self._transcription_source = {}
+                self._reset_undo_for_new_transcript()
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"start fresh: leaving the open transcript: {e}")
+        dest, n = fresh_start.archive(saves, project_folder, timeline)
+        from osdoc import log_info
+        log_info(f"Start fresh: {n} item(s) of '{timeline}' moved to {dest}")
+        self._saved_transcript_path = None
+        self._saved_edit_entry = None
+        if is_open and hasattr(self, 'show_home'):
+            self.show_home()
+        home = getattr(self, 'home_view', None)
+        if home is not None and hasattr(home, 'refresh'):
+            try:
+                home.refresh()
+            except Exception:
+                pass
+        self._show_temporary_status(self.txt("fresh_done", "“{tl}” starts fresh. The earlier work is in the archive "
+                                             "folder (StoryCraft › saves › archive).").format(tl=timeline), 9000)
+        return True
+
+    def _reset_story_for_new_transcript(self):
+        """Another transcript opens: the previous one's story must not show (or be saved) as the new one's.
+        Its board comes back from its own file once the transcript is loaded (story_board.maybe_restore)."""
+        board = getattr(self, 'story_board', None)
+        if board is not None:
+            board._syncing = True
+            try:
+                board.list_edit.clear()
+                board.list_unused.clear()
+            finally:
+                board._syncing = False
+            board.sentences = []
+            board._restored_for = None
+            board.edge_air = {}
+        self._story = None
+        self._retranscribe_job = None          # a pass still running on the old transcript is dropped (see _poll)
+        # a .bws's Resolve recipe belongs to that file only (a .json opened next mustn't export it)
+        self._assembly_recipe = None
+        self._media_inventory = []
+        self._extracted_drt_path = None
+        self._extracted_xml_path = None
+        vv = getattr(self, 'voice_view', None)
+        if vv is not None:
+            vv._sel = None                     # the previous timeline's candidate: Generate patch mustn't use it
+        sv = getattr(self, 'story_view', None)
+        if sv is not None:
+            try:
+                sv.search.clear()
+                sv._dirty = True
+            except Exception:
+                pass
+        rv = getattr(self, 'review_view', None)
+        if rv is not None:
+            rv._show_all = False
+            rv._index = {"cuts": 0, "repeats": 0}
+            try:
+                rv.btn_all.setChecked(False)
+            except Exception:
+                pass
+        if board is not None:
+            try:
+                board._notify("story")
+            except Exception:
+                pass
 
     def _apply_imported_project(self, state: dict, meta: dict):
         try:
@@ -3569,6 +4349,9 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                 self.text_canvas.load_data(state.get('words_data', []))
                 self._show_transcript_view()
                 self._measure_sounds_soon()
+                if getattr(self, 'story_board', None) is not None:
+                    # normally restored from the waveform pass, which doesn't run without the recording
+                    QTimer.singleShot(0, self.story_board.maybe_restore)
                 
             # Restore Chapters
             saved_chapters = state.get('chapters', [])
@@ -3594,6 +4377,17 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                 
             if hasattr(self, 'audio_preview') and not from_main_window:
                 self.audio_preview.check_audio_availability()
+
+            # Opened as one of this timeline's edits (Home, saved work of an edit timeline): show
+            # that edit's chapter instead of the one the project was saved on
+            pending_tl = getattr(self, '_pending_chapter_tl', None)
+            self._pending_chapter_tl = None
+            if pending_tl:
+                match = next((ch.get('name') for ch in (self._chapters or []) if ch.get('tl_name') == pending_tl), None)
+                if match:
+                    self._switch_chapter(match)
+                    if hasattr(self, '_title_bar') and hasattr(self._title_bar, 'chapter_dropdown'):
+                        self._title_bar.chapter_dropdown.setText(match)
 
             # Rebuild title from snapshot using new title bar mode
             if getattr(self, '_transcription_source', None):
@@ -4553,10 +5347,37 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             chip.setText(f"<span style='color:{dot}'>●</span>&nbsp; {text}")
             chip.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(8.5)}pt; background: #1e1e1e; border: 1px solid #333333;"
                                f" border-radius: {config.S(10)}px; padding: {config.S(2)}px {config.S(10)}px;")
-            chip.show()
+            chip.setVisible(getattr(self, "_wf_chip_room", True))  # the bar hides it when narrow
+
+    # The inspector tabs each step shows (a panel opened from elsewhere still gets its tab)
+    _STEP_TABS = {"cleanup": ("assembly", "silence", "fillers", "script_analysis", "main_panel"),
+                  "compose": ("story", "script_analysis", "main_panel")}
 
     def _set_workflow_step(self, step):
-        """Fill the pill of the step the user is on."""
+        """Fill the pill of the step the user is on; show that step's inspector tabs."""
+        self._workflow_step = step
+        if getattr(self, 'text_canvas', None) is not None:
+            self.text_canvas.update()   # Compose greys out what's left out of the story
+            self._apply_clean_view()
+        keep = self._STEP_TABS.get(step)
+        tabs = getattr(self, '_inspector_tabs', {})
+        if keep:
+            # the open panel belongs to the other step (e.g. Story, then Clean up): open this step's first one
+            open_key = next((k for k, b in tabs.items() if b.isChecked()), None)
+            if open_key is not None and open_key not in keep:
+                self._open_activity(keep[0])
+            for key, b in tabs.items():
+                b.setProperty("step_hidden", key not in keep and not b.isChecked())
+            relayout = getattr(self, '_insp_relayout', None)
+            if relayout:
+                relayout()
+        self._sync_rail()
+        args = getattr(self, '_edit_view_args', None)
+        if args is not None:   # Clean shows the story with its cut words, Compose what plays
+            try:
+                self._update_edit_view(*args)
+            except Exception as exc:
+                print(f"[edit view] {exc}")
         for name, (btn, badge, text) in getattr(self, 'workflow_steps', {}).items():
             on = "true" if name == step else "false"
             for w in (btn, badge, text):
@@ -4570,7 +5391,8 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             # Pauses and colours: what gets removed. If both live on one side, the colours win.
             self._open_activity("silence")
             self._open_activity("assembly")
-            self._set_transcript_view("original")  # the cut words must show to be un-cut
+            # Clean is a mode on the story: its text when there is one, else the whole recording
+            self._apply_clean_view()
         elif step == "compose":
             self._open_activity("story")
             self._set_transcript_view("edit")
@@ -4598,6 +5420,53 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         ops, _ = self.engine.calculate_timeline_structure_with_cuts([dict(w) for w in canvas.words_data], fps, prefs)
         return ops, fps, float(prefs.get('offset', 0.133))
 
+    def _update_cut_marks(self, clips):
+        """The story's cuts as flags on the waveform (where each clip ends in the recording)."""
+        wt = getattr(self, 'waveform_timeline', None)
+        if wt is None or not hasattr(wt, 'set_cut_marks'):
+            return
+        if not getattr(wt, '_cut_marks_wired', False) and hasattr(wt, 'cut_mark_clicked'):
+            wt.cut_mark_clicked.connect(self.open_review_cut)
+            wt._cut_marks_wired = True
+        wt.set_cut_marks([(float(clips[k - 1]["cut_end"]), k) for k in range(1, len(clips))] if clips else [])
+
+    @staticmethod
+    def _apply_edge_air(clips, words):
+        """Review's tighter / airier pause at a cut: a clip edge sits that many seconds of air from its
+        first / last word, never inside the neighbouring word of the recording."""
+        spoken = sorted((float(w["start"]), float(w["end"])) for w in words
+                        if w.get("type") == "word" and w.get("start") is not None and w.get("end") is not None)
+        starts = [a for a, _ in spoken]
+        import bisect
+        out = []
+        for c in clips:
+            air = c.get("air") or {}
+            if not air:
+                out.append(c)
+                continue
+            c = dict(c)
+            # Review's ± Word: the clip's edge moved to a word boundary (a hesitation dropped, a word added)
+            if air.get("end_t") is not None:
+                c["src_end"] = float(air["end_t"])
+                air = dict(air)
+                air.setdefault("tail", 0.12)
+            if air.get("start_t") is not None:
+                c["src_start"] = float(air["start_t"])
+                air = dict(air)
+                air.setdefault("lead", 0.08)
+            if "tail" in air and c.get("src_end") is not None:
+                # a word-moved edge: the next word may start exactly there (speech words touch)
+                i = (bisect.bisect_left(starts, float(c["src_end"]) - 0.005) if air.get("end_t") is not None
+                     else bisect.bisect_right(starts, float(c["src_end"]) + 0.01))
+                limit = starts[i] - 0.02 if i < len(starts) else float(c["src_end"]) + air["tail"]
+                c["cut_end"] = max(float(c["src_end"]), min(float(c["src_end"]) + air["tail"], limit))
+            if "lead" in air and c.get("src_start") is not None:
+                i = bisect.bisect_left(starts, float(c["src_start"]) - 0.01) - 1
+                prev_end = spoken[i][1] if i >= 0 else 0.0
+                c["cut_start"] = min(float(c["src_start"]), max(float(c["src_start"]) - air["lead"], prev_end + 0.02))
+            out.append(c)
+        return out
+
     def _set_story_from_board(self, clips):
         """The story board's Edit list became the story (None/empty = normal Assemble)."""
         if clips:
@@ -4606,13 +5475,19 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             if canvas is not None and canvas.words_data and (self.engine.load_preferences() or {}).get('refine_cuts', True):
                 # clean cut points: a little air before and after, on the quietest moment, never inside a word
                 clips = algorithms.refine_clip_edges(clips, canvas.words_data, self._edit_audio())
+            if canvas is not None and canvas.words_data:
+                clips = self._apply_edge_air(clips, canvas.words_data)
             self._story = {"clips": clips, "keep_source_order": False, "duration": 0.0}
+            self._update_cut_marks(clips)
+            self._update_story_words(clips)
             ctx = self._story_ops_context()
             if ctx:
                 ops, fps, offset = ctx
                 self._story["duration"] = sum(o['e'] - o['s'] for o in algorithms.apply_story_order(ops, clips, fps, offset)) / fps
         else:
             self._story = None
+            self._update_cut_marks(None)
+            self._update_story_words(None)
         self._update_story_banner()
         self._refresh_cut_preview()
 
@@ -4666,14 +5541,23 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         canvas = getattr(self, 'text_canvas', None)
         if canvas is None or not canvas.words_data:
             return
-        placed = finishing.placed_words(canvas.words_data, ops, fps, offset)
-        order, starts, last_order = [], [], object()
-        for i, _t0, _t1, op in placed:
-            if op.get('order', None) != last_order:
-                starts.append(i)
-                last_order = op.get('order', None)
-            order.append(i)
-        canvas.set_edit_order(order, starts if any('order' in op for op in ops) else ())
+        self._edit_view_args = (ops, fps, offset)
+        story = getattr(self, '_story', None)
+        if story and story.get("clips") and getattr(self, '_workflow_step', None) == "cleanup":
+            # Clean is a mode on the story: each block's whole stretch of the recording, cut words included
+            # (drawn struck through, so they can be un-cut), blocks in story order with a header each;
+            # what's not in the story folded between them (gui/components/transcription_canvas.py)
+            canvas.set_story_plan(self._clean_story_plan(story["clips"]))
+            self._apply_clean_view()
+        else:
+            placed = finishing.placed_words(canvas.words_data, ops, fps, offset)
+            order, starts, last_order = [], [], object()
+            for i, _t0, _t1, op in placed:
+                if op.get('order', None) != last_order:
+                    starts.append(i)
+                    last_order = op.get('order', None)
+                order.append(i)
+            canvas.set_edit_order(order, starts if any('order' in op for op in ops) else ())
         prefs = self.engine.load_preferences() or {}
         sig = hashlib.sha1(repr((
             [(o['s'], o['e'], o.get('order'), bool(o.get('bleep')), o.get('spk')) for o in ops],
@@ -4827,15 +5711,89 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         QTimer.singleShot(300, _poll)
 
     def _set_transcript_view(self, mode):
-        """'original' or 'edit' (only what the edit keeps, in play order)."""
+        """Programmatic only (Clean has no view toggle): 'edit' = Clean's own view (the story, or the
+        whole recording while the Recording switch is on); 'original' = show the whole recording. With
+        the story on, a search hit outside it (words marked _search_active) opens its fold instead."""
         canvas = getattr(self, 'text_canvas', None)
-        if canvas is not None:
+        if canvas is None:
+            return
+        if mode == "original" and canvas.story_view_on():
+            hits = [i for i, w in enumerate(canvas.words_data) if w.get('_search_active')]
+            if hits and canvas.reveal(hits):
+                return
+            canvas.set_edit_view(False)
+            self._update_story_legend()
+            return
+        if getattr(self, '_workflow_step', None) != "cleanup":   # the older Compose step: what plays
             canvas.set_edit_view(mode == "edit")
-        seg = getattr(self, 'seg_transcript_view', None)
-        if seg is not None and seg.value() != mode:
-            seg.blockSignals(True)
-            seg.set_value(mode) if hasattr(seg, 'set_value') else None
-            seg.blockSignals(False)
+        self._apply_clean_view()
+
+    def _clean_shows_story(self):
+        return bool((getattr(self, '_story', None) or {}).get("clips")) and not getattr(self, '_clean_recording', False)
+
+    def _apply_clean_view(self):
+        """Clean shows the story (its blocks in story order, the rest folded) when there is one, and the
+        whole recording without a story or while the player's Recording switch is on."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None:
+            return
+        if getattr(self, '_workflow_step', None) == "cleanup":
+            canvas.set_edit_view(self._clean_shows_story())
+        hint = getattr(self, 'clean_story_hint', None)
+        if hint is not None:
+            hint.setVisible(bool(canvas.words_data) and not (getattr(self, '_story', None) or {}).get("clips")
+                            and not getattr(self, '_clean_recording', False))
+        # Clean on the story: where the whole recording went (the player's Play original), quietly, until
+        # the user closes it or uses the switch (then not again this session)
+        rec_hint = getattr(self, 'clean_rec_hint', None)
+        if rec_hint is not None:
+            rec_hint.setVisible(bool(canvas.words_data) and self._clean_shows_story()
+                                and getattr(self, '_workflow_step', None) == "cleanup"
+                                and not getattr(self, '_clean_rec_hint_off', False))
+        self._update_story_legend()
+
+    def _on_recording_mode(self, on):
+        """The player's Play original switch (audio_preview.recording_mode_changed; Recording in the code)."""
+        self._clean_recording = bool(on)
+        if on:
+            self._clean_rec_hint_off = True      # found it: the tip pointing to it has done its job
+        self._apply_clean_view()
+
+    def _clean_story_plan(self, clips):
+        """What Clean shows on the story: build_story_plan with the story board's sentences and blocks."""
+        from gui.components.transcription_canvas import build_story_plan
+        canvas = self.text_canvas
+        board = getattr(self, 'story_board', None)
+        sentences = list(getattr(board, 'sentences', None) or [])
+        blocks = None
+        if sentences:
+            try:
+                blocks = [tuple(b) for b in board.edit_blocks() if b]
+            except Exception:
+                blocks = None
+        lengths = None
+        try:
+            import story_time
+            lengths = [0.0] * len(clips)
+            for k, a, b in story_time.spans(self):
+                if 0 <= k < len(lengths):
+                    lengths[k] += max(0.0, b - a)
+        except Exception:
+            lengths = None
+        return build_story_plan(canvas.words_data, clips, sentences or None, blocks, lengths)
+
+    def _clean_fold_add(self, a, b):
+        """Clean > a fold's Add to the story: sentences a..b into the story (the Story page's add)."""
+        sv = getattr(self, 'story_view', None)
+        if sv is not None and hasattr(sv, 'drop_payload'):
+            sv.drop_payload(f"avail:{int(a)},{int(b)}", None)   # reloads the board's model, then add(a, b)
+            return
+        board = getattr(self, 'story_board', None)
+        if board is None or not getattr(board, 'sentences', None):
+            return
+        import story_edit
+        edit, unused = story_edit.include(board.edit_blocks(), board.unused_blocks(), int(a), int(b))
+        board.load(board.sentences, edit, unused)
 
     def _update_color_legend(self, surviving_ops, cut_ops):
         """Summarise which colours the next Assemble keeps (as coloured clips) or leaves out.
@@ -4947,7 +5905,12 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             else:
                 seg.setToolTip(self.txt("tt_color_mode"))
             seg.changed.connect(lambda m, k=key: self._on_legend_mode(k, m))
-            h.addWidget(seg, 0, Qt.AlignVCenter)
+            # Its own line under the name and description: the four choices don't fit beside a name
+            # in a 330 px panel once translated (German, Ukrainian)
+            seg_row = QHBoxLayout()
+            seg_row.setContentsMargins(config.S(20), config.S(2), 0, 0)
+            seg_row.addWidget(seg, 1)
+            v.addLayout(seg_row)
             lay.addWidget(row)
 
     def _legend_mode(self, key):
@@ -4967,8 +5930,14 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         plain = {c.lower() for c in prefs.get('plain_colors', []) or []}
         return "keep" if key.lower() in plain else "mark"
 
-    def _on_legend_mode(self, key, mode):
+    def _on_legend_mode(self, key, mode, push_undo=True):
         """Keep = stays in, without colour; Mark = stays as a coloured clip; Cut = removed."""
+        if push_undo and getattr(self, 'undo_manager', None) is not None:
+            before = self._legend_mode(key)
+            if before is not None and before != mode:
+                def _apply(m, k=key):  # the legend redraws itself: its signature includes the modes
+                    self._on_legend_mode(k, m, push_undo=False)
+                self.undo_manager.push_state(lambda k=key: self._legend_mode(k), _apply, before)
         if key == "Tan":
             if mode == "cut":
                 self.tgl_silence_cut.setChecked(True)
@@ -5045,6 +6014,22 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             prefs['mark_tool'] = checked_btn.property("status_id")
 
         self.engine.save_preferences(prefs)
+        # Voice patches the user accepted (Voice tab): not a preference, so added after saving
+        try:
+            from voice_patch.edit import accepted_patches, in_story
+            import story_time as st
+            spans = st.spans(self)
+            allp = accepted_patches(self._voice_patch_dir())
+            prefs['voice_patches'] = [p for p in allp if in_story(p, spans)]
+            left = len(allp) - len(prefs['voice_patches'])
+            if left:
+                from osdoc import log_info
+                log_info(f"Send: {left} voice patch(es) left out: their words are no longer fully in the story")
+                self._show_temporary_status(self.txt(
+                    "msg_patches_left_out", "{n} voice patch(es) left out: the story no longer holds all the words "
+                    "they replace (Voice patch shows them).").format(n=left), 8000)
+        except Exception:
+            prefs['voice_patches'] = []
 
         story = getattr(self, '_story', None)
         if story:
@@ -5071,6 +6056,18 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             self._show_temporary_status(self.txt("msg_sync_busy"), 5000)
             return
         if not hasattr(self, 'text_canvas') or not self.text_canvas.words_data: return
+        self._page_before_send = self._stack.currentIndex()   # Send comes back where it was started
+        _board = getattr(self, 'story_board', None)
+        if _board is not None and getattr(_board, 'sentences', None) and not _board.edit_blocks():
+            # nothing in the story: say what Send would do instead of building the whole interview silently
+            _box = CustomMsgBox(self, self.txt("send_empty_title", "The story is empty"),
+                                self.txt("send_empty_msg", "Nothing is in the story yet, so Send to Resolve would build the "
+                                         "whole interview (cleaned). Send the whole interview?"),
+                                self.txt("send_empty_yes", "Send the whole interview"), self.txt("btn_cancel", "Cancel"))
+            if not _box.exec():
+                return
+        try: self._story_version_auto("send")  # Story versions: keep what is sent; never blocks Send
+        except Exception: pass
 
         from PySide6.QtWidgets import QApplication
 
@@ -5171,7 +6168,11 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
 
     def _on_assembly_success(self, new_tl_name, clean_ops):
-        if hasattr(self, 'go_to_page'): self.go_to_page(2)
+        back = getattr(self, '_page_before_send', 2)
+        if hasattr(self, 'go_to_page'): self.go_to_page(back if back in (2, 3, 4, 5, 6) else 2)
+        if getattr(self, 'toast', None) is not None and new_tl_name:
+            QTimer.singleShot(400, lambda: self.toast.show_text(self.txt(
+                "send_done", "Sent to Resolve as “{name}” (kept in Versions).").format(name=new_tl_name), 7000))
         self._record_edit(new_tl_name, clean_ops)
         self._remember_sent(new_tl_name)
         fin = getattr(self.engine, 'last_finish', None) or {}
@@ -5187,6 +6188,10 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                 self.resolve_handler.set_current_timeline(new_tl_name)
             except Exception:
                 pass
+            QTimer.singleShot(300, lambda: self._flag_sent_timeline(new_tl_name))
+            patches = (getattr(self, '_assembly_prefs', None) or {}).get('voice_patches') or []
+            if patches and clean_ops:
+                QTimer.singleShot(600, lambda: self._place_voice_patches(new_tl_name, clean_ops, patches))
         
         # Audio preview mapping
         if hasattr(self, 'audio_preview') and getattr(self, '_assembly_prefs', None):
@@ -5295,7 +6300,8 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         dlg.exec()
 
     def _on_assembly_error(self, err_msg):
-        if hasattr(self, 'go_to_page'): self.go_to_page(2)
+        back = getattr(self, '_page_before_send', 2)
+        if hasattr(self, 'go_to_page'): self.go_to_page(back if back in (2, 3, 4, 5, 6) else 2)
         dlg = CustomMsgBox(self, self.txt("lbl_error"), err_msg, self.txt("btn_ok"))
         dlg.exec()
 
@@ -5586,14 +6592,21 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                 when = timeline_store.when_text(os.path.getmtime(self._saved_transcript_path))
                 choice = WorkspaceWarningOverlay(
                     self._stack, self.txt("msg_saved_exists_title"),
-                    self.txt("msg_saved_exists_desc").format(timeline=selected_tl_name, when=when),
-                    self.txt("btn_open_saved_short"), btn_reject_text=self.txt("btn_transcribe_again"),
+                    self.txt("msg_saved_exists_desc2", "\"{timeline}\" was transcribed before (saved {when}). Open "
+                             "that work, or start fresh? Starting fresh puts the earlier transcript, story, versions "
+                             "and voice patches in the archive (nothing in Resolve changes).").format(
+                        timeline=selected_tl_name, when=when),
+                    self.txt("btn_open_saved_short"), btn_reject_text=self.txt("btn_start_fresh", "Start fresh"),
                     btn_cancel_text=self.txt("btn_cancel")).exec()
                 if choice == QDialog.Accepted:
                     self._open_saved_transcript()
                     return
                 if choice != QDialog.Rejected:
                     return
+                # Start fresh: the earlier work mustn't come back on top of the new transcript
+                from handlers import timeline_store as _ts
+                self.start_fresh(_ts._safe(self.engine._get_resolve_project_name() or "No project"),
+                                 selected_tl_name, confirm=False)
 
         # 1. Hide side panels (saving pre-analysis state)
         self._pre_analysis_panels_state = (
@@ -5948,6 +6961,9 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         dlg.exec()
 
     def _on_analysis_finished(self, words_data, segments_data):
+        self._loaded_project_dir = None  # transcribed now: the Resolve project it came from
+        self._ai_sentences = None
+        self._reset_undo_for_new_transcript()
         # Keep this timeline's transcript as soon as the editor holds it
         QTimer.singleShot(2000, self._save_timeline_transcript_soon)
         # Stop hint rotation
@@ -6180,6 +7196,7 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
 
     def _build_marker_radio_buttons(self):
         self._ensure_avoid_marker()
+        self._ensure_voice_marker()
         # Clear layout
         while self.markers_layout.count():
             item = self.markers_layout.takeAt(0)
@@ -6365,8 +7382,17 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
             app.focusChanged.connect(_on_focus_changed)
             self._focus_signal_connected = True
 
+        # Review/Voice own Space: on page 3 (Review cuts) and 4 (Voice patch) Space and ←/→ drive the
+        # page's own A/B player, not the preview dock below it
+        def _page_player():
+            view = {3: getattr(self, 'review_view', None), 4: getattr(self, 'voice_view', None)}.get(self._stack.currentIndex())
+            return view if view is not None and hasattr(view, 'toggle_play') else None
+
         def safe_toggle_play():
             if self._is_input_widget():
+                return
+            if _page_player() is not None:
+                _page_player().toggle_play()
                 return
             if hasattr(self, 'audio_preview') and self.audio_preview.is_preview_active():
                 self.audio_preview.toggle_play()
@@ -6374,14 +7400,23 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
         def safe_skip_backward():
             if self._is_input_widget():
                 return
+            if _page_player() is not None:
+                if hasattr(_page_player(), 'skip'):
+                    _page_player().skip(-1)
+                return
             if hasattr(self, 'audio_preview') and self.audio_preview.is_preview_active():
                 self.audio_preview.skip_backward()
 
         def safe_skip_forward():
             if self._is_input_widget():
                 return
+            if _page_player() is not None:
+                if hasattr(_page_player(), 'skip'):
+                    _page_player().skip(1)
+                return
             if hasattr(self, 'audio_preview') and self.audio_preview.is_preview_active():
                 self.audio_preview.skip_forward()
+        # Review/Voice own Space: END
 
         _make(shortcuts.get('play_stop', 'Space'), safe_toggle_play)
         _make(shortcuts.get('skip_backward', 'Left'), safe_skip_backward)
@@ -6462,16 +7497,197 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
     # Page navigation
     # ------------------------------------------------------------------
 
+    def _sync_rail(self):
+        rail = getattr(self, 'workspace_rail', None)
+        if rail is not None:
+            rail.sync()
+        corner = getattr(self, 'corner_actions', None)
+        if corner is not None and hasattr(self, '_stack'):
+            corner.sync(self._stack.currentIndex())
+            self._fit_editor_bar_to_corner()
+
+    def _fit_editor_bar_to_corner(self):
+        """With the inspector closed, the editor's top bar reaches the window's corner: keep Home/Settings' room."""
+        lay = getattr(self, 'workflow_bar_layout', None)
+        corner = getattr(self, 'corner_actions', None)
+        if lay is None or corner is None:
+            return
+        m = lay.contentsMargins()
+        right = config.S(16) if self._panel_right.isVisible() else corner.width() + config.S(26)
+        if m.right() != right:
+            lay.setContentsMargins(m.left(), m.top(), right, m.bottom())
+
+    def show_home(self):
+        """Page 0, Home screen."""
+        if hasattr(self, 'home_stack'):
+            self.home_stack.setCurrentIndex(0)
+        if self._stack.currentIndex() != 0:
+            self.go_to_page(0)
+        self._sync_rail()
+
+    def show_review(self):
+        """Page 3: the cut-by-cut review of the story (needs an open transcript)."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return
+        view = getattr(self, 'review_view', None)
+        if view is None:
+            try:
+                from gui.views.review_view import ReviewView
+            except Exception as e:
+                from osdoc import log_error
+                log_error(f"Review screen unavailable: {e}")
+                return
+            view = self.review_view = ReviewView(self, self._review_host)
+            self._review_host.layout().addWidget(view)
+            if hasattr(view, 'composeRequested'):  # its empty state: "Go to Compose"
+                view.composeRequested.connect(self.show_story)
+        self.go_to_page(3)
+        view.refresh()
+
+    def show_review_patch(self, end_id):
+        """Review cuts opened on a voice patch's joins (Voice patch's Insert patch): its "Patch in" selected,
+        with a note and the way back. Returns False (and goes back to Voice patch) when Review can't show it."""
+        self.show_review()
+        view = getattr(self, 'review_view', None)
+        if self._stack.currentIndex() == 3 and view is not None and view.focus_patch(end_id):
+            return True
+        if self._stack.currentIndex() == 3:
+            self.show_voice()
+        return False
+
+    def show_voice(self):
+        """Page 4: VoiceStudio connection and voice patches for the open timeline."""
+        view = getattr(self, 'voice_view', None)
+        if view is None:
+            from gui.views.voice_view import VoiceView
+            view = self.voice_view = VoiceView(self, self._voice_host)
+            self._voice_host.layout().addWidget(view)
+        self.go_to_page(4)
+        view.refresh()
+
+    def show_ai(self):
+        """Page 6: every AI helper in one place."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return
+        panel = getattr(self, '_versions_panel', None)
+        if panel is not None and not panel.isHidden():
+            panel.close_panel()
+        view = getattr(self, 'ai_view', None)
+        if view is None:
+            from gui.views.ai_view import AIView
+            view = self.ai_view = AIView(self, self._ai_host)
+            self._ai_host.layout().addWidget(view)
+        self.go_to_page(6)
+        view.refresh()
+
+    def reload_from_resolve(self):
+        """The timeline sent to Resolve, edited there by hand, back into the story (gui/views/reload_flow.py)."""
+        from gui.views.reload_flow import run_reload
+        return run_reload(self)
+
+    def _flag_sent_timeline(self, tl_name):
+        """Every clip Send laid gets StoryCraft's flag (a reload reads those; clip colours stay for the marks)."""
+        rh = getattr(self, 'resolve_handler', None)
+        if rh is None or getattr(rh, 'backend', None) != 'native' or getattr(rh, 'project', None) is None:
+            return
+        try:
+            import resolve_roundtrip as RT
+            from osdoc import log_info
+            tl = RT._find_timeline(rh.project, tl_name)
+            if tl is not None:
+                log_info(f"roundtrip: flagged {RT.flag_timeline(tl)} clip(s) of '{tl_name}'")
+        except Exception as e:
+            from osdoc import log_error
+            log_error(f"roundtrip: flagging '{tl_name}' failed: {e}")
+
+    def show_clean(self):
+        """Clean: marking words. With a story, its blocks in story order (the rest folded); the whole
+        recording without one or while the player's Recording switch is on."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return
+        if self._stack.currentIndex() != 2:
+            self.go_to_page(2)
+        self._on_workflow_step("cleanup")
+
+    def show_story(self):
+        """Page 5: the story block by block, with what is not in it (needs an open transcript)."""
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return
+        panel = getattr(self, '_versions_panel', None)
+        if panel is not None and not panel.isHidden():   # (isVisible is False while another page shows)
+            panel.close_panel()          # Story is the plain story (Versions opens it again itself)
+        view = getattr(self, 'story_view', None)
+        if view is None:
+            from gui.views.story_workspace import StoryWorkspaceView
+            view = self.story_view = StoryWorkspaceView(self, self._story_host)
+            self._story_host.layout().addWidget(view)
+        self.go_to_page(5)
+        view.refresh()
+
+    # ── Story versions (story_versions.py, gui/views/story_versions_view.py) ── BEGIN ──────────
+    def show_story_versions(self):
+        """The Story page with its Versions panel: save, compare, restore, rename, delete versions."""
+        from gui.views.story_versions_view import show_story_versions
+        return show_story_versions(self)
+
+    def _story_version_auto(self, kind, note=""):
+        """Keep the story now as an automatic version ("send", "ai", "resolve"). Never raises."""
+        try:
+            from gui.views.story_versions_view import auto_version
+            return auto_version(self, kind, note=note)
+        except Exception as e:
+            from osdoc import log_error
+            log_error(f"Story version ({kind}): {e}")
+            return None
+    # ── Story versions ── END ─────────────────────────────────────────────────────────────
+
+    def show_setup_form(self):
+        """Page 0, the set-up form (source, language, model) Home's start cards lead to."""
+        if hasattr(self, 'home_stack'):
+            self.home_stack.setCurrentIndex(1)
+            back = getattr(self, '_home_back', None)
+            if back is not None:
+                back.raise_()
+        if self._stack.currentIndex() != 0:
+            self.go_to_page(0)
+
     def go_to_page(self, index: int):
         """
         Switch the central QStackedWidget to *index*.
         """
+        if index == 2 and getattr(self, '_land_on_story', False):
+            # a transcript that just opened: its story first (the editor is built; Story needs its words)
+            self._land_on_story = False
+
+            def _land():
+                if self._stack.currentIndex() == 2 and hasattr(self, 'show_story'):
+                    self.show_story()
+            QTimer.singleShot(400, _land)
+        if index != 3 and self._stack.currentIndex() == 3 and getattr(self, 'review_view', None) is not None:
+            self.review_view.stop()  # leaving Review: no audio keeps playing behind the editor
+        if index != 4 and self._stack.currentIndex() == 4 and getattr(self, 'voice_view', None) is not None:
+            self.voice_view.stop()
+        # The inspector belongs to Clean (the editor, page 2): hidden everywhere else, given back on return
+        _wide = (0, 1, 3, 4, 5, 6)
+        if index in _wide and self._stack.currentIndex() not in _wide:
+            self._inspector_before_voice = self._panel_right.isVisible()
+            self._panel_right.hide()
+        elif index not in _wide and self._stack.currentIndex() in _wide and getattr(self, '_inspector_before_voice', False):
+            self._panel_right.show()
         self._stack.setCurrentIndex(index)
+        self._sync_rail()
         if index == 0:
             QTimer.singleShot(0, self._refresh_saved_transcript_offer)
         if hasattr(self, 'top_island') and getattr(self.top_island, 'isVisible', lambda: False)():
             self.top_island._ensure_z_order()
-        if index != 2:
+        # Every work page around the story (Clean, Review, Voice, Story) keeps the timeline and video preview
+        _canvas = getattr(self, 'text_canvas', None)
+        _work = index in (2, 3, 4, 5, 6) and bool(_canvas is not None and getattr(_canvas, 'words_data', None))
+        if index != 2 and not _work:
             if hasattr(self, 'audio_preview') and self.audio_preview:
                 self.audio_preview.hide()
             if hasattr(self, '_title_bar') and hasattr(self._title_bar, 'deactivate_transcription_mode'):
@@ -6762,3 +7978,139 @@ class BadWordsGUI(FramelessWindowMixin, _BaseMainWindow):
                 self.closeEvent_callback()
         else:
             event.ignore()
+
+    # ── Voice patches in Clean up: the "To voice patch" marker and the Found row ─────────────────
+    # (voice_patch/candidates.py finds the passages; gui/views/voice_view.py patches them)
+    _VOICE_COLORS = ("Purple", "Pink", "Teal", "Lime", "Apricot", "Yellow", "Beige", "Orange", "Brown")
+
+    def _voice_marker(self):
+        for m in (self.engine.load_preferences() or {}).get('custom_markers', []) or []:
+            if m.get('role') == 'voice' and m.get('color'):
+                return m
+        return None
+
+    def _voice_status(self):
+        m = self._voice_marker()
+        return f"custom_{m['color']}" if m else None
+
+    def _ensure_voice_marker(self, force=False):
+        """The To voice patch marker, created once and set to Keep: it never cuts or colours anything in
+        Resolve, it lists the words in the Voice tab. Deleting it in Settings is final, unless the user
+        asks for it again (Mark them: force)."""
+        m = self._voice_marker()
+        if m:
+            return m
+        prefs = self.engine.load_preferences() or {}
+        if prefs.get('voice_marker_added') and not force:
+            return None
+        markers = list(prefs.get('custom_markers', []) or [])
+        used = {x.get('color', '').lower() for x in markers}
+        color = next((c for c in self._VOICE_COLORS if c.lower() not in used), None)
+        if color is None:
+            return None
+        m = {"name": self.txt("marker_voice", "To voice patch"), "color": color, "role": "voice"}
+        markers.append(m)
+        low = color.lower()
+        prefs['custom_markers'] = markers
+        prefs['plain_colors'] = [c for c in (prefs.get('plain_colors', []) or []) if c.lower() != low] + [color]
+        prefs['auto_cut_colors'] = [c for c in (prefs.get('auto_cut_colors', []) or []) if c.lower() != low]
+        prefs['bleep_colors'] = [c for c in (prefs.get('bleep_colors', []) or []) if c.lower() != low]
+        prefs['voice_marker_added'] = True
+        self.engine.save_preferences(prefs)
+        btn = getattr(self, 'color_cut_buttons', {}).get(color)
+        if btn is not None and btn.isChecked():
+            btn.setChecked(False)
+        if force and hasattr(self, 'markers_layout'):
+            self._build_marker_radio_buttons()
+            self._rebuild_mark_strip()
+        return m
+
+    def _voice_candidates(self, endings=None, audio=None):
+        """{group: [candidate]} for the open transcript (voice_patch.candidates.find_all). The sentence
+        groups are cached per transcript; endings come from the Voice tab once it measured them.
+        audio: 16 kHz mono of the recording, when the caller has it (clarity then counts the voice level)."""
+        from voice_patch import candidates as VC
+        canvas = getattr(self, 'text_canvas', None)
+        words = getattr(canvas, 'words_data', None) or []
+        if not words:
+            return {g: [] for g in VC.GROUPS}
+        prefs = self.engine.load_preferences() or {}
+        fillers = prefs.get('filler_words', config.DEFAULT_BAD_WORDS)
+        audio_path = next((w.get('meta_audio_path') for w in words if w.get('meta_audio_path')), None)
+        key = (id(words), len(words), audio_path, sum(1 for w in words if w.get('is_stammer')))
+        cache = getattr(self, '_voice_cand_cache', None)
+        if audio is None:
+            ca = getattr(self, '_clarity_audio', None)
+            audio = ca[1] if ca and ca[0] == audio_path else None
+        if not cache or cache['key'] != key or (audio is not None and not cache['with_audio']):
+            import algorithms
+            from engine import clarity
+            repeats = algorithms.find_repeats(words)
+            sents = VC.sentences(words)
+            scorer = clarity.make_scorer(words, audio)
+            cache = {'key': key, 'repeats': repeats, 'with_audio': audio is not None,
+                     'hard': VC.hard_to_understand(words, scorer, sents, fillers, repeats),
+                     'incoherent': VC.incoherent(words, fillers, repeats, sents)}
+            self._voice_cand_cache = cache
+        if endings is None:
+            view = getattr(self, 'voice_view', None)
+            an = getattr(view, '_an', None)
+            if an is not None and an.tl.get('audio_path') == audio_path:
+                endings = getattr(view, '_rows', None)
+        return {"endings": [dict(r, group="endings", kind="ending") for r in endings or [] if r.get("unfinished")],
+                "hard": cache['hard'], "incoherent": cache['incoherent'],
+                "tagged": VC.tagged(words, self._voice_status(), fillers, cache['repeats']),
+                "_endings_measured": endings is not None}
+
+    def _refresh_voice_found(self):
+        """Clean up > Found > To voice patch: how many passages could be patched (all groups)."""
+        lbl = getattr(self, 'det_voice_count', None)
+        if lbl is None:
+            return
+        try:
+            from voice_patch import candidates as VC
+            groups = self._voice_candidates()
+            n = VC.count_unique(self.text_canvas.words_data, groups)
+            text = self.txt("det_count").format(count=n)
+            if n and not groups.get("_endings_measured"):
+                text += " · " + self.txt("det_voice_endings_later", "endings: open Voice patch")
+        except Exception:
+            n, text = 0, self.txt("det_count").format(count=0)
+        lbl.setText(text)
+        btn = getattr(self, 'btn_voice_mark', None)
+        if btn is not None:
+            btn.setEnabled(n > 0)
+
+    def _mark_voice_candidates(self):
+        """Found > To voice patch > Mark them: the To voice patch marker on every candidate's words, as
+        one undo step. Words already cut (or carrying another mark) are left alone, so the edit doesn't change."""
+        from voice_patch import candidates as VC
+        canvas = getattr(self, 'text_canvas', None)
+        if canvas is None or not canvas.words_data:
+            return 0
+        m = self._ensure_voice_marker(force=True)
+        if m is None:
+            self._show_temporary_status(self.txt("msg_voice_no_color", "No colour is free for the To voice patch "
+                                                 "marker: delete a custom marker in Settings."))
+            return 0
+        status = f"custom_{m['color']}"
+        words = canvas.words_data
+        groups = self._voice_candidates()
+        ids_map = {w.get('id'): i for i, w in enumerate(words)}
+        ids = set()
+        for g in ("endings", "hard", "incoherent"):
+            for c in groups.get(g) or []:
+                ids.update(VC.candidate_indices(words, c, ids_map))
+        ids = [i for i in sorted(ids) if words[i].get('type') == 'word' and words[i].get('status') in (None, '', 'normal')]
+
+        def _mark(w):
+            w['status'] = status
+            w['manual_status'] = status
+            w['is_auto'] = False
+            w['selected'] = True
+            w['overlay_suppressed'] = True
+        n = self._mark_words(ids, _mark) if ids else 0
+        self._show_temporary_status(self.txt("msg_voice_marked", "{count} words marked To voice patch: Voice patch "
+                                             "lists them under Tagged by you.").format(count=n))
+        self._refresh_voice_found()
+        return n

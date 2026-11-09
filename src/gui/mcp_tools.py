@@ -156,6 +156,8 @@ def build_tools(win):
         board = getattr(win, 'story_board', None)
         if board is not None:
             board.load_ai_story(sentences, story)
+            try: win._story_version_auto("ai")  # Story versions: keep the AI's edit
+            except Exception: pass
             if hasattr(win, '_toggle_activity') and not getattr(win.btn_nav_story, 'is_active', False):
                 win._toggle_activity("story")
         else:

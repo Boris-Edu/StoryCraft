@@ -970,10 +970,15 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
 
         return temp_words
 
-    def transcribe_passage(self, audio_path, t0, t1, settings, fps=24.0):
+    PASSAGE_BEFORE_S, PASSAGE_AFTER_S = 2.0, 1.0   # audio Whisper hears around a passage (context)
+
+    def transcribe_passage(self, audio_path, t0, t1, settings, fps=24.0, context_text="", bounds=None):
         """Transcribe [t0, t1] (seconds) of audio_path again with the same model, device, prompt and
         filler list as a full analysis. Returns word dicts on the original time base (only the words
-        whose middle falls inside the passage; the 0.25 s margins just give Whisper context)."""
+        whose middle falls inside the passage; the audio around it only gives Whisper context).
+        context_text: the transcript just before the passage, given to Whisper as the text it follows.
+        bounds: (lo, hi) the free time around the passage (end of the word before, start of the word after):
+        a word Whisper places partly outside the selection but inside that time is kept."""
         lang = settings.get('lang')
         if isinstance(lang, str) and lang.lower() == "auto":
             lang = None
@@ -988,11 +993,18 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         compute = prefs.get('ai_compute_type', '') or 'int8'
         if compute.lower() == 'auto':
             compute = 'int8'
-        prompt = config.get_whisper_prompt_for_lang(lang, prefs.get('ai_initial_prompt', '').strip())
+        # StoryCraft's verbatim prompt + the user's names/terms + what was said just before, last (Whisper
+        # leans most on the end of its prompt)
+        user_terms = prefs.get('ai_initial_prompt', '').strip()
+        if user_terms and config.is_default_whisper_prompt(user_terms):
+            user_terms = ""
+        parts = [config.get_whisper_prompt_for_lang(lang, None), user_terms,
+                 " ".join(str(context_text or "").split()[-40:])]
+        prompt = " ".join(p for p in parts if p)
         fillers = prefs.get('filler_words', config.DEFAULT_BAD_WORDS)
 
-        start = max(0.0, float(t0) - 0.25)
-        dur = float(t1) + 0.25 - start
+        start = max(0.0, float(t0) - self.PASSAGE_BEFORE_S)
+        dur = float(t1) + self.PASSAGE_AFTER_S - start
         clip = os.path.join(self.os_doc.get_temp_folder(), f"passage_{int(time.time() * 1000)}.wav")
         subprocess.run([self.ffmpeg_cmd, "-v", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", audio_path,
                         "-ac", "1", "-ar", "16000", clip], check=True, capture_output=True)
@@ -1017,7 +1029,8 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
                 if k in w and w[k] is not None:
                     w[k] = float(w[k]) + start
             mid = (w.get('start', 0.0) + w.get('end', 0.0)) / 2.0
-            if t0 - 0.05 <= mid <= t1 + 0.05:
+            lo, hi = bounds if bounds else (t0, t1)
+            if min(t0, lo) - 0.05 <= mid <= max(t1, hi) + 0.05:
                 w.pop('meta_audio_path', None)
                 w.pop('meta_global_silence', None)
                 out.append(w)
@@ -1298,6 +1311,26 @@ class AudioEngine(PreferencesMixin, AudioExtractionMixin, TranscriptionMixin):
         snap_f = int(round(snap_max_s * fps))
 
         raw_silence = words_data[0].get('meta_global_silence', None)
+        if raw_silence:
+            # A broken silence analysis (seen in saves: one range over the whole recording) would cut
+            # everything: when it claims most of the speech is silence, use the transcript's own pauses.
+            try:
+                import bisect
+                _words = [w for w in words_data if w.get('type') == 'word']
+                _rs = sorted((float(s['s']), float(s['e'])) for s in raw_silence)
+                _starts = [a for a, _b in _rs]
+                _inside = 0
+                for w in _words:
+                    m = (float(w['start']) + float(w['end'])) / 2
+                    k = bisect.bisect_right(_starts, m) - 1
+                    if k >= 0 and _rs[k][1] >= m:
+                        _inside += 1
+                if _words and _inside > 0.5 * len(_words):
+                    log_info(f"calculate_timeline_structure: silence analysis covers {_inside}/{len(_words)} words; "
+                             f"ignored (the transcript's pauses are used)")
+                    raw_silence = None
+            except (KeyError, TypeError, ValueError):
+                pass
         _audio_end_s = words_data[-1].get('end', 0.0)
         if raw_silence:
             _audio_end_s = max(_audio_end_s, raw_silence[-1]['e'])
@@ -2240,6 +2273,11 @@ except Exception as e:
                 calc_settings["audio_end_cap_s"] = audio_end_cap_s
             clean_ops = self.calculate_timeline_structure(words_data, fps, calc_settings)
             clean_ops = self.apply_story(clean_ops, settings, fps)
+            if settings.get("voice_patches"):
+                # Each accepted voice patch's words become their own clip, so their audio can be
+                # switched off under the patch once the timeline exists (main window, voice_patch.edit)
+                from voice_patch.edit import split_ops
+                clean_ops = split_ops(clean_ops, settings["voice_patches"], fps)
             time.sleep(0.05)
 
             # ── NAME FOR NEW TIMELINE ─────────────────────────────────────────

@@ -305,7 +305,19 @@ class SearchOverlayWidget(QFrame):
             active_indices = self.matches[self.current_index]
             for idx in active_indices:
                 canvas.words_data[idx]['_search_active'] = True
-            
+
+            # Edited view shows only the story: a match outside it is shown in the Original transcript
+            shown = canvas.edit_ids() if hasattr(canvas, 'edit_ids') else None
+            if shown is not None and active_indices[0] not in shown and hasattr(self.main_window, '_set_transcript_view'):
+                self.main_window._set_transcript_view("original")
+                if hasattr(self.main_window, '_show_temporary_status'):
+                    self.main_window._show_temporary_status(self.main_window.txt(
+                        "search_not_in_story", "This match isn't in the story: showing the whole recording"), 6000)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self._apply_active_highlight)   # scroll once the original is laid out
+                canvas.update()
+                return
+
             w = canvas.words_data[active_indices[0]]
             if '_rect' in w:
                 rect = w['_rect']

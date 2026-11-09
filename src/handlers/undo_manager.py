@@ -20,9 +20,16 @@ class UndoManager:
         self.undo_stack = deque(maxlen=self.max_size)
         self.redo_stack = deque(maxlen=self.max_size)
 
+    def clear(self):
+        """A new transcript was opened: nothing from the previous one can be undone into it."""
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+
     def push(self, action):
         if not action or not action.get('changes'):
             return
+        if getattr(self, '_applying', False):
+            return  # side effects of an undo/redo (a refresh, speakers recounted) aren't new steps
         self.undo_stack.append(action)
         self.redo_stack.clear()
         
@@ -32,7 +39,11 @@ class UndoManager:
     def undo(self):
         if not self.undo_stack: return
         action = self.undo_stack.pop()
-        redo_action = self._apply_action(action)
+        self._applying = True
+        try:
+            redo_action = self._apply_action(action)
+        finally:
+            self._applying = False
         self.redo_stack.append(redo_action)
         self.canvas.update()
         if hasattr(self.main_window, 'waveform_timeline') and self.main_window.waveform_timeline:
@@ -40,11 +51,17 @@ class UndoManager:
         
         if hasattr(self.main_window, 'autosave_manager'):
             self.main_window.autosave_manager.schedule(self.main_window._build_autosave_payload)
+        if hasattr(self.main_window, '_after_undo_redo'):
+            self.main_window._after_undo_redo(action, True)
 
     def redo(self):
         if not self.redo_stack: return
         action = self.redo_stack.pop()
-        undo_action = self._apply_action(action)
+        self._applying = True
+        try:
+            undo_action = self._apply_action(action)
+        finally:
+            self._applying = False
         self.undo_stack.append(undo_action)
         self.canvas.update()
         if hasattr(self.main_window, 'waveform_timeline') and self.main_window.waveform_timeline:
@@ -52,8 +69,20 @@ class UndoManager:
         
         if hasattr(self.main_window, 'autosave_manager'):
             self.main_window.autosave_manager.schedule(self.main_window._build_autosave_payload)
+        if hasattr(self.main_window, '_after_undo_redo'):
+            self.main_window._after_undo_redo(action, False)
+
+    def push_state(self, current, apply, before):
+        """Undo for anything outside the transcript words (story board, colour and pause choices):
+        current() returns the state now, apply(state) puts a state back, before is the state the
+        change replaced."""
+        self.push({"type": "state", "current": current, "apply": apply, "value": before, "changes": {"_": 1}})
 
     def _apply_action(self, action):
+        if action.get('type') == 'state':
+            now = action['current']()
+            action['apply'](action['value'])
+            return dict(action, value=now)
         if action.get('type') == 'speakers':
             # {"spk": {index: speaker or None}, "meta": speaker list}: swap with the current state
             import speakers_model

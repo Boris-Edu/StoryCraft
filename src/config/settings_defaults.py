@@ -38,6 +38,7 @@ DEFAULT_USER_DATA = {
 DEFAULT_SETTINGS = {
     "settings_version":     VERSION,
     "ui_theme":             "storycraft",  # storycraft | graphite | midnight | studio (gui/theme.py)
+    "ui_text_size":         "comfortable",  # compact (original) | comfortable | large (config.TEXT_SIZES)
     "plain_colors":         [],          # colours kept in the edit without colour ("Keep")
     # ── Transcript / Editor ──────────────────────────────────────────────────
     "editor_font_family":   get_system_font_name(),
@@ -145,7 +146,7 @@ DEFAULT_SETTINGS = {
 
 import sys
 # Keys in DEFAULT_SETTINGS whose change requires an application restart.
-RESTART_REQUIRED_KEYS = ["compute_type", "device", "gui_lang", "ai_compute_type", "app_icon"]
+RESTART_REQUIRED_KEYS = ["compute_type", "device", "gui_lang", "ai_compute_type", "app_icon", "ui_text_size"]
 if sys.platform.startswith("win"):
     RESTART_REQUIRED_KEYS.append("always_on_top")
 

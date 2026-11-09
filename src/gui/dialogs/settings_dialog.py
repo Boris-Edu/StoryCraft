@@ -450,7 +450,7 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
 
         # ── LEFT: Category list ───────────────────────────────────────────
         # A calm sidebar a step deeper than the content: brand block, then the pages as soft pills.
-        side_w = config.S(184)
+        side_w = config.TS(184)
         self.category_list = QListWidget()
         self.category_list.setFocusPolicy(Qt.NoFocus)
         self.category_list.setFont(QFont(config.UI_FONT_NAME, config.FS(10)))
@@ -1278,6 +1278,17 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
             self.dropdown_theme.setText(val)
             _on_theme_changed(val)
         self._add_row(form_gen, self.txt("lbl_theme"), self.dropdown_theme, _theme.DISPLAY_NAMES[_theme.DEFAULT], _reset_theme)
+
+        # Text size: read at start (config.set_text_size), so a change asks for a restart on Apply
+        self._text_size_keys = ["compact", "comfortable", "large"]
+        self._text_size_names = [self.txt("opt_text_" + k) for k in self._text_size_keys]
+        self.dropdown_text_size = CustomDropdown(self._text_size_names)
+        cur_size = prefs.get('ui_text_size', config.DEFAULT_SETTINGS.get('ui_text_size', 'comfortable'))
+        if cur_size not in self._text_size_keys:
+            cur_size = 'comfortable'
+        self.dropdown_text_size.setText(self._text_size_names[self._text_size_keys.index(cur_size)])
+        self._add_row(form_gen, self.txt("lbl_text_size"), self.dropdown_text_size,
+                      self.txt("opt_text_comfortable"), lambda val: self.dropdown_text_size.setText(val))
 
         # App Icon (Visual Selector) - Spans full width matching Language dropdown
         icon_row = QHBoxLayout()
@@ -2918,8 +2929,15 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
         except (RuntimeError, AttributeError):
             shortcuts_dict = old_prefs.get('shortcuts', {})
 
+        try:
+            size_val = self.dropdown_text_size.text()
+            text_size = self._text_size_keys[self._text_size_names.index(size_val)]
+        except (RuntimeError, AttributeError, ValueError):
+            text_size = old_prefs.get('ui_text_size', config.DEFAULT_SETTINGS.get('ui_text_size', 'comfortable'))
+
         state = {
             'gui_lang':           lang_code,
+            'ui_text_size':       text_size,
             'settings_view_mode': 'basic' if is_basic else 'advanced',
             'app_icon':           icon_val,
             'shortcuts':          shortcuts_dict,
@@ -2994,6 +3012,12 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
         self._safe_set('chk_telemetry_opt_in', bool(_g('telemetry_opt_in', False)), 'setChecked')
         self._safe_set('chk_telemetry_geo', bool(_g('telemetry_geo', False)), 'setChecked')
         
+        try:
+            size_key = _g('ui_text_size', 'comfortable')
+            if hasattr(self, 'dropdown_text_size') and size_key in self._text_size_keys:
+                self.dropdown_text_size.setText(self._text_size_names[self._text_size_keys.index(size_key)])
+        except RuntimeError:
+            pass
         try:
             if hasattr(self, 'icon_group'):
                 icon_name = _g('app_icon', 'default')
@@ -3192,6 +3216,7 @@ class SettingsDialog(FramelessWindowMixin, _BaseDialog):
                 'shortcuts': f"{self.txt('tab_shortcuts')}",
                 'gui_lang': f"{self.txt('tab_general')}: {self.txt('lbl_language')}",
                 'app_icon': f"{self.txt('tab_general')}: {self.txt('lbl_app_icon')}",
+                'ui_text_size': f"{self.txt('tab_general')}: {self.txt('lbl_text_size')}",
                 'view_mode': f"{self.txt('tab_transcript')}: {self.txt('lbl_display_mode')}",
                 'editor_font_family': f"{self.txt('tab_transcript')}: {self.txt('lbl_transcript_font')}",
                 'editor_font_size': f"{self.txt('tab_transcript')}: {self.txt('lbl_font_size_pt')}",

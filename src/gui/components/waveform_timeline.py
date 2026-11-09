@@ -12,6 +12,12 @@ Interactive waveform timeline preview ribbon widget with real-time playhead.
 Inspired by DaVinci Resolve / Fairlight interface aesthetics.
 Features pre-rendered QPixmap waveform caching for stable 60 FPS scrubbing,
 cut range hatching (solid vs hatched), High-DPI scaling, and bidirectional playhead synchronization.
+
+Two views (the player decides, gui/components/audio_preview.py):
+  - the story (set_story_view): the story's audio laid end to end in play order, built from the recording's
+    peaks (no extra decoding), block boundaries marked, voice patches as cyan stretches at the length they
+    play; the time axis, the playhead and clicks are STORY time;
+  - the recording (set_recording_view): the raw recording with its cut regions, in recording time.
 """
 
 from __future__ import annotations
@@ -111,17 +117,30 @@ class WaveformTimelineWidget(QWidget):
     seek_requested = Signal(float, bool)  # Emits (target_timestamp_s, sync_resolve)
     scrub_started = Signal()
     scrub_finished = Signal()
+    cut_mark_clicked = Signal(int)  # a story cut's marker (set_cut_marks) was clicked: its number
 
     def __init__(self, parent: Optional[QWidget] = None, main_window: Optional[QWidget] = None):
         super().__init__(parent)
         self.main_window = main_window
 
+        # Card metrics: inner padding, corner radius, and the height of the header pills
+        self._PAD = config.S(10)
+        self._CARD_R = config.S(11)
+        self._PILL_H = config.S(22)
+
         # State
         self._peaks: Optional[WaveformPeaks] = None
         self._audio_path: Optional[str] = None
         self._clip_name: str = "A1: Timeline Audio"
-        self._duration: float = 0.0
+        self._duration: float = 0.0          # length of what is shown (the story, or the recording)
+        self._src_duration: float = 0.0      # length of the recording
         self._playhead_time: float = 0.0
+        # The story view (set_story_view): None = the recording
+        self._story_runs = None              # [(story_s, story_e, src_s, src_e, tag)]
+        self._story_blocks: List[Tuple[float, int]] = []  # (story time, cut number): where blocks 2.. start
+        self._story_label: str = ""
+        self._story_peaks: Optional[WaveformPeaks] = None
+        self._story_segments: List[Dict[str, Any]] = []
         self._is_scrubbing: bool = False
         self._hover_x: Optional[float] = None
         self._worker: Optional[WaveformWorker] = None
@@ -146,18 +165,18 @@ class WaveformTimelineWidget(QWidget):
         self.scrollbar.setStyleSheet(f"""
             QScrollBar:horizontal {{
                 height: {config.S(7)}px;
-                background: #141414;
+                background: #1a1a1a;
                 margin: 0px;
                 border: none;
-                border-radius: {config.S(3)}px;
+                border-radius: {config.S(2)}px;
             }}
             QScrollBar::handle:horizontal {{
-                background: #2f2f2f;
+                background: #3a3a3a;
                 min-width: {config.S(24)}px;
-                border-radius: {config.S(3)}px;
+                border-radius: {config.S(2)}px;
             }}
             QScrollBar::handle:horizontal:hover {{
-                background: #444444;
+                background: #4a4a4a;
             }}
             QScrollBar::handle:horizontal:pressed {{
                 background: #2ecc71;
@@ -181,22 +200,24 @@ class WaveformTimelineWidget(QWidget):
         self.zoom_ctrl_widget.setObjectName("ZoomCtrlWidget")
         zoom_layout = QHBoxLayout(self.zoom_ctrl_widget)
         zoom_layout.setContentsMargins(0, 0, 0, 0)
-        zoom_layout.setSpacing(config.S(3))
+        zoom_layout.setSpacing(config.S(4))
 
+        # Small pills, the same family as the clip chip painted on the left of the header row
+        pill_h = self._PILL_H
         btn_style = f"""
             QPushButton {{
-                background-color: rgba(22, 22, 22, 0.85);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: {config.S(3)}px;
-                color: #b0b0b0;
+                background-color: #2a2a2a;
+                border: 1px solid #303030;
+                border-radius: {pill_h // 2 - 1}px;
+                color: #d4d4d4;
                 font-family: "{config.UI_FONT_NAME}";
                 font-size: {config.FS(8)}pt;
-                font-weight: bold;
-                padding: 0px {config.S(5)}px;
+                font-weight: 600;
+                padding: 0px;
             }}
             QPushButton:hover {{
-                background-color: rgba(45, 45, 45, 0.95);
-                border-color: rgba(46, 204, 113, 0.7);
+                background-color: #333333;
+                border-color: #3a3a3a;
                 color: #ffffff;
             }}
             QPushButton:pressed {{
@@ -207,19 +228,19 @@ class WaveformTimelineWidget(QWidget):
         self.btn_zoom_out.setToolTip(self.main_window.txt("tt_zoom_out", "Zoom Out") if self.main_window else "Zoom Out")
         self.btn_zoom_out.setStyleSheet(btn_style)
         self.btn_zoom_out.clicked.connect(self.zoom_out)
-        self.btn_zoom_out.setFixedSize(config.S(22), config.S(18))
+        self.btn_zoom_out.setFixedSize(config.S(26), pill_h)
 
         self.btn_zoom_fit = QPushButton("Fit", self.zoom_ctrl_widget)
         self.btn_zoom_fit.setToolTip(self.main_window.txt("tt_zoom_fit", "Fit Timeline") if self.main_window else "Fit Timeline")
         self.btn_zoom_fit.setStyleSheet(btn_style)
         self.btn_zoom_fit.clicked.connect(self.zoom_fit)
-        self.btn_zoom_fit.setFixedSize(config.S(28), config.S(18))
+        self.btn_zoom_fit.setFixedSize(config.S(38), pill_h)
 
         self.btn_zoom_in = QPushButton("+", self.zoom_ctrl_widget)
         self.btn_zoom_in.setToolTip(self.main_window.txt("tt_zoom_in", "Zoom In (or Ctrl + Wheel)") if self.main_window else "Zoom In")
         self.btn_zoom_in.setStyleSheet(btn_style)
         self.btn_zoom_in.clicked.connect(self.zoom_in)
-        self.btn_zoom_in.setFixedSize(config.S(22), config.S(18))
+        self.btn_zoom_in.setFixedSize(config.S(26), pill_h)
 
         zoom_layout.addWidget(self.btn_zoom_out)
         zoom_layout.addWidget(self.btn_zoom_fit)
@@ -249,7 +270,10 @@ class WaveformTimelineWidget(QWidget):
         if clip_name:
             self._clip_name = clip_name
         if peaks is not None:
-            self._duration = peaks.duration
+            self._src_duration = peaks.duration
+            self._story_peaks = None
+            if self._story_runs is None:
+                self._duration = peaks.duration
         self._zoom_level = 1.0
         self._view_start_time = 0.0
         self._sync_scrollbar()
@@ -274,7 +298,9 @@ class WaveformTimelineWidget(QWidget):
         if effective_name:
             self._clip_name = effective_name
         if duration and duration > 0:
-            self._duration = duration
+            self._src_duration = duration
+            if self._story_runs is None:
+                self._duration = duration
 
         if self._audio_path == audio_path and self._peaks is not None and self._peaks.num_points > 0:
             return  # Already loaded
@@ -313,6 +339,131 @@ class WaveformTimelineWidget(QWidget):
         self._worker.error.connect(self._on_peaks_error)
         self._worker.start()
 
+    def set_cut_marks(self, marks) -> None:
+        """[(source time s, cut number)]: where the story cuts, drawn as small flags; clicking one emits
+        cut_mark_clicked(n) (the main window opens that cut in Review)."""
+        self._cut_marks = list(marks or [])
+        self.update()
+
+    # -- The story view ---------------------------------------------------------------------------
+    @property
+    def story_view(self) -> bool:
+        """True while the ribbon shows the story (story time), False for the recording."""
+        return self._story_runs is not None
+
+    def set_story_view(self, runs, length: float, block_starts=(), label: str = "") -> None:
+        """Show the story: runs = StoryMap.runs (play order), length = the story's length (s), block_starts =
+        [(story time, cut number)] where blocks 2.. start (cut k sits before block k, as in Review), label =
+        the chip text. Cheap to call again with the same data (nothing is rebuilt)."""
+        runs = [tuple(r) for r in (runs or [])]
+        blocks = sorted((float(t), int(k)) for t, k in (block_starts or []) if 0.0 < float(t) < float(length))
+        was_story = self._story_runs is not None
+        same = was_story and runs == self._story_runs and abs(length - self._duration) < 1e-6
+        if same and blocks == self._story_blocks and label == self._story_label:
+            return
+        self._story_blocks = blocks
+        self._story_label = label or ""
+        if not same:
+            self._story_runs = runs
+            self._story_peaks = None
+            self._duration = max(0.0, float(length))
+            self._story_segments = self._build_story_segments(runs)
+            if not was_story:
+                self._zoom_level = 1.0
+                self._view_start_time = 0.0
+            self._view_start_time = max(0.0, min(self._view_start_time, max(0.0, self._duration - self.visible_duration())))
+            self._playhead_time = min(self._playhead_time, self._duration)
+            self._sync_scrollbar()
+        self._needs_pixmap_rebuild = True
+        self.update()
+
+    def set_recording_view(self, label: Optional[str] = None) -> None:
+        """Show the raw recording (recording time), as Clean always did."""
+        if self._story_runs is None and (label is None or label == self._story_label):
+            return
+        was_story = self._story_runs is not None
+        self._story_runs = None
+        self._story_peaks = None
+        self._story_segments = []
+        self._story_blocks = []
+        self._story_label = label or ""
+        self._duration = self._src_duration
+        if was_story:
+            self._zoom_level = 1.0
+            self._view_start_time = 0.0
+            self._sync_scrollbar()
+        self._needs_pixmap_rebuild = True
+        self.update()
+
+    PATCH_COLOR = "#22d3ee"   # voice patches: cyan, as on the Story page
+
+    def _build_story_segments(self, runs):
+        out = []
+        for e0, e1, _s, _e, tag in runs:
+            if e1 - e0 <= 1e-4:
+                continue
+            out.append({"start_s": e0, "end_s": e1, "type": "patch" if tag is not None else "normal",
+                        "is_cut": False, "color": RESOLVE_CLIP_COLORS["normal"]})
+        return out
+
+    def _ensure_story_peaks(self) -> Optional[WaveformPeaks]:
+        """The story's waveform: the recording's peaks of each run, end to end (a patch's span stretched to
+        the length it plays). Built once per story with numpy slicing: instant even for long interviews."""
+        if self._story_peaks is not None or self._story_runs is None:
+            return self._story_peaks
+        src = self._peaks
+        if src is None or src.num_points <= 0 or self._duration <= 0:
+            return None
+        pps = int(src.points_per_second or 400)
+        n_src = src.num_points
+        mins, maxs, rmss = [], [], []
+        done = 0
+        for e0, e1, s, e, _tag in self._story_runs:
+            n = int(round(e1 * pps)) - done
+            if n <= 0:
+                continue
+            done += n
+            i0 = max(0, min(n_src - 1, int(s * pps)))
+            i1 = max(i0 + 1, min(n_src, int(round(e * pps))))
+            if i1 - i0 == n:
+                idx = slice(i0, i1)
+            else:
+                idx = np.minimum(n_src - 1, i0 + (np.arange(n) * (i1 - i0) // max(1, n)))
+            mins.append(src.peaks_min[idx])
+            maxs.append(src.peaks_max[idx])
+            rmss.append(src.peaks_rms[idx] if len(src.peaks_rms) == n_src else src.peaks_max[idx])
+        if not mins:
+            return None
+        self._story_peaks = WaveformPeaks(
+            peaks_min=np.concatenate(mins).astype(np.float32, copy=False),
+            peaks_max=np.concatenate(maxs).astype(np.float32, copy=False),
+            peaks_rms=np.concatenate(rmss).astype(np.float32, copy=False),
+            duration=float(self._duration),
+            sample_rate=getattr(src, "sample_rate", 16000),
+            points_per_second=pps,
+        )
+        return self._story_peaks
+
+    def _story_cut_marks(self):
+        """[(story time, cut number)] at the block boundaries: the same cuts Review opens."""
+        return list(self._story_blocks)
+
+    def _cut_mark_at(self, x, y):
+        marks = self._story_cut_marks() if self._story_runs is not None else getattr(self, '_cut_marks', None)
+        if not marks or self._duration <= 0:
+            return None
+        clip_rect = self._get_clip_rect()
+        if y > clip_rect.y() + config.S(18):
+            return None
+        vis_dur = self.visible_duration()
+        best = None
+        for t, n in marks:
+            mx = clip_rect.x() + ((t - self._view_start_time) / vis_dur) * clip_rect.width()
+            d = abs(mx - x)
+            if d <= config.S(7) and (best is None or d < best[0]):
+                best = (d, n)
+        return best[1] if best else None
+
     def set_words_data(self, words_data: Optional[List[Dict[str, Any]]]) -> None:
         """
         Passes transcript words to calculate visual cut ranges (Solid vs Hatched).
@@ -327,7 +478,7 @@ class WaveformTimelineWidget(QWidget):
         self._cut_ranges.clear()
         self._timeline_segments = []
 
-        total_dur = self._duration if self._duration > 0 else 0.0
+        total_dur = self._src_duration if self._src_duration > 0 else 0.0
 
         if not self._words_data or not self.main_window or not hasattr(self.main_window, "engine"):
             if total_dur > 0:
@@ -470,7 +621,9 @@ class WaveformTimelineWidget(QWidget):
         """Updates clip label or duration badge."""
         self._clip_name = clip_name
         if duration is not None and duration > 0:
-            self._duration = duration
+            self._src_duration = duration
+            if self._story_runs is None:
+                self._duration = duration
         self._needs_pixmap_rebuild = True
         self.update()
 
@@ -482,6 +635,8 @@ class WaveformTimelineWidget(QWidget):
         self._peaks = None
         self._audio_path = None
         self._duration = 0.0
+        self._src_duration = 0.0
+        self._story_peaks = None
         self._playhead_time = 0.0
         self._words_data = None
         self._cut_ranges.clear()
@@ -592,7 +747,10 @@ class WaveformTimelineWidget(QWidget):
     def _on_peaks_ready(self, peaks: WaveformPeaks, audio_path: str) -> None:
         if self._audio_path == audio_path:
             self._peaks = peaks
-            self._duration = peaks.duration
+            self._src_duration = peaks.duration
+            self._story_peaks = None
+            if self._story_runs is None:
+                self._duration = peaks.duration
             self._recalculate_cut_ranges()
             self._zoom_level = 1.0
             self._view_start_time = 0.0
@@ -609,12 +767,20 @@ class WaveformTimelineWidget(QWidget):
     # Pre-rendered Waveform Cache (QPixmap)
     # -------------------------------------------------------------------------
 
+    def _header_top(self) -> int:
+        """Top of the header pills inside the card."""
+        return self._PAD - config.S(2)
+
+    def _header_h(self) -> int:
+        """Height of the card's header row (clip chip + zoom pills) including the gap below it."""
+        return self._header_top() + self._PILL_H + config.S(8)
+
     def _get_clip_rect(self) -> QRectF:
         """Calculates the Fairlight clip ribbon rectangle inside the widget with breathing room."""
-        m_x = float(config.S(8))
-        m_y_top = float(config.S(22))   # Top space for breathing room + zoom controls
-        m_y_bot = float(config.S(16))   # Bottom space for breathing room + scrollbar
-        sb_h = float(config.S(7)) if (hasattr(self, 'scrollbar') and self.scrollbar.isVisible()) else 0.0
+        m_x = float(self._PAD)
+        m_y_top = float(self._header_h())  # Header row: clip chip (left) + zoom pills (right)
+        m_y_bot = float(self._PAD)
+        sb_h = float(config.S(7) + config.S(6)) if (hasattr(self, 'scrollbar') and self.scrollbar.isVisible()) else 0.0
 
         w = max(10.0, self.width() - 2 * m_x)
         h = max(10.0, self.height() - m_y_top - m_y_bot - sb_h)
@@ -643,11 +809,18 @@ class WaveformTimelineWidget(QWidget):
         ry = clip_rect.y()
         rw = clip_rect.width()
         rh = clip_rect.height()
-        radius = float(config.S(6))
+        radius = float(config.S(8))
 
-        # 1. Dark container background
-        bg_container = QRectF(0, 0, w, h)
-        painter.fillRect(bg_container, qc("#141414"))
+        from gui import theme as _theme
+        modern = _theme.current() != "classic"
+
+        # 1. The card: rounded, hairline border, on the dock surface
+        card_rect = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
+        card_path = QPainterPath()
+        card_path.addRoundedRect(card_rect, float(self._CARD_R), float(self._CARD_R))
+        painter.fillPath(card_path, qc("#222222"))
+        painter.setPen(QPen(qc("#303030"), 1.0))
+        painter.drawPath(card_path)
 
         # 2. Fairlight Audio Clip Ribbon
         clip_path = QPainterPath()
@@ -661,11 +834,12 @@ class WaveformTimelineWidget(QWidget):
         t_end = t_start + vis_dur
 
         # 3. Draw Solid Timeline Segments (DaVinci Resolve Style Solid Colors)
-        # Classic keeps Resolve's Fairlight green; the other themes put plain clips on their own surface
-        from gui import theme as _theme
-        modern = _theme.current() != "classic"
-        plain_clip = qc("#232323") if modern else RESOLVE_CLIP_COLORS["normal"]
-        segments = self._timeline_segments
+        # Classic keeps Resolve's Fairlight green; the other themes put plain clips on a recessed track
+        plain_clip = qc("#1a1a1a") if modern else RESOLVE_CLIP_COLORS["normal"]
+        story = self._story_runs is not None
+        segments = self._story_segments if story else self._timeline_segments
+        peaks = self._ensure_story_peaks() if story else self._peaks
+        patch_bg = qc("#0f3d47")
         if not segments:
             # Default normal Fairlight clip
             painter.fillRect(clip_rect, plain_clip)
@@ -681,8 +855,11 @@ class WaveformTimelineWidget(QWidget):
                 seg_rect = QRectF(x0, ry, seg_w, rh)
 
                 if seg["is_cut"]:
-                    painter.fillRect(seg_rect, CUT_VOID_COLOR)
+                    painter.fillRect(seg_rect, qc(CUT_VOID_COLOR.name()))
                     painter.fillRect(seg_rect, QBrush(qc(22, 22, 22), Qt.BDiagPattern))
+                elif seg.get("type") == "patch":
+                    painter.fillRect(seg_rect, patch_bg)
+                    continue                     # one patch is one piece: no seams inside it
                 else:
                     seg_col = plain_clip if (modern and seg.get("type") == "normal") else seg["color"]
                     painter.fillRect(seg_rect, seg_col)
@@ -693,10 +870,11 @@ class WaveformTimelineWidget(QWidget):
                     painter.setPen(QPen(seg_col.darker(118), 1.0))
                     painter.drawLine(QPointF(x0, ry + rh), QPointF(x1, ry + rh))
 
-                # Vertical divider seam at cut point
-                painter.setPen(QPen(qc(16, 16, 16), 1.0))
-                painter.drawLine(QPointF(x0, ry), QPointF(x0, ry + rh))
-                painter.drawLine(QPointF(x1, ry), QPointF(x1, ry + rh))
+                # Vertical divider seam at cut point (the story marks its block boundaries instead)
+                if not story:
+                    painter.setPen(QPen(qc(16, 16, 16), 1.0))
+                    painter.drawLine(QPointF(x0, ry), QPointF(x0, ry + rh))
+                    painter.drawLine(QPointF(x1, ry), QPointF(x1, ry + rh))
 
         # 4. Subtle horizontal audio midline and dB guide lines
         mid_y = ry + rh / 2.0
@@ -708,7 +886,7 @@ class WaveformTimelineWidget(QWidget):
         painter.drawLine(QPointF(rx, mid_y), QPointF(rx + rw, mid_y))
 
         # 5. Draw Waveform Silhouette (1:1 with DaVinci Resolve Screenshot 3)
-        if self._peaks is not None and self._peaks.num_points > 0 and self._duration > 0:
+        if peaks is not None and peaks.num_points > 0 and self._duration > 0:
             num_cols = max(1, int(rw))
 
             # Smooth power scaling preserving quiet speech while preventing clipping
@@ -724,7 +902,7 @@ class WaveformTimelineWidget(QWidget):
                 t0 = t_start + (col / float(num_cols)) * vis_dur
                 t1 = t_start + ((col + 1) / float(num_cols)) * vis_dur
 
-                p_min, p_max, _, _ = self._peaks.get_visible_peaks(t0, t1)
+                p_min, p_max, _, _ = peaks.get_visible_peaks(t0, t1)
                 if len(p_max) > 0:
                     v_max = float(np.max(p_max))
                     v_min = float(np.min(p_min))
@@ -767,6 +945,26 @@ class WaveformTimelineWidget(QWidget):
                 painter.setPen(QPen(wave_col, 1.0))
                 painter.drawLine(QPointF(rx, mid_y), QPointF(rx + rw, mid_y))
 
+            # The story: voice patches as cyan stretches (a bar on top), block boundaries as seams
+            if story:
+                cyan = qc(self.PATCH_COLOR)
+                for seg in segments:
+                    if seg.get("type") != "patch" or seg["end_s"] <= t_start or seg["start_s"] >= t_end:
+                        continue
+                    x0 = rx + ((max(t_start, seg["start_s"]) - t_start) / vis_dur) * rw
+                    x1 = rx + ((min(t_end, seg["end_s"]) - t_start) / vis_dur) * rw
+                    tint = QColor(cyan)
+                    tint.setAlpha(60)
+                    painter.fillRect(QRectF(x0, ry, max(1.0, x1 - x0), rh), tint)
+                    painter.fillRect(QRectF(x0, ry, max(1.0, x1 - x0), float(config.S(3))), cyan)
+                seam = QPen(qc("#9a9a9a") if modern else qc("#cfe9db"), 1.0)
+                seam.setColor(QColor(seam.color().red(), seam.color().green(), seam.color().blue(), 150))
+                painter.setPen(seam)
+                for bt, _k in self._story_blocks:
+                    if t_start <= bt <= t_end:
+                        bx = rx + ((bt - t_start) / vis_dur) * rw
+                        painter.drawLine(QPointF(bx, ry), QPointF(bx, ry + rh))
+
             # Mask cut voids & diagonal hatching over the waveform in cut segments
             for seg in segments:
                 if not seg["is_cut"]:
@@ -789,46 +987,59 @@ class WaveformTimelineWidget(QWidget):
             painter.restore()
         else:
             # Subtle waiting text
-            painter.setPen(qc("#4e735b"))
-            placeholder_font = QFont(config.UI_FONT_NAME, config.FS(9))
-            placeholder_font.setItalic(True)
+            painter.setPen(qc("#8a8a8a") if modern else qc("#4e735b"))
+            placeholder_font = QFont(_theme.ui_font() or config.UI_FONT_NAME, config.FS(9))
             painter.setFont(placeholder_font)
             txt = self.main_window.txt("lbl_timeline_ready", "A1: Ready for timeline audio") if self.main_window and hasattr(self.main_window, "txt") else "A1: Ready for timeline audio"
             painter.drawText(clip_rect, Qt.AlignCenter, txt)
             painter.restore()
 
-        # Ribbon outer border
-        border_pen = QPen(qc("#1b3b2c"), 1.0)
+        # Ribbon outer border: a hairline (Classic keeps Fairlight's dark green edge)
+        border_pen = QPen(qc("#303030") if modern else qc("#1b3b2c"), 1.0)
         painter.setPen(border_pen)
         painter.drawPath(clip_path)
 
-        # 6. Clip Name Label Badge (at bottom-left corner of the clip, matching Screenshot 1!)
-        badge_font = QFont(config.UI_FONT_NAME, config.FS(8))
-        badge_font.setBold(False)
+        # 6. Clip Name Chip: a small pill in the card's header row, left of the zoom pills
+        badge_font = QFont(_theme.ui_font() or config.UI_FONT_NAME, config.FS(8))
+        badge_font.setWeight(QFont.DemiBold)
         painter.setFont(badge_font)
 
-        clip_label = self._clip_name
         fm = painter.fontMetrics()
+        pill_h = float(self._PILL_H)
+        dot_d = float(config.S(6))
+        badge_pad_x = float(config.S(10))
+        dot_gap = float(config.S(7))
+        zoom_w = self.zoom_ctrl_widget.width() if hasattr(self, "zoom_ctrl_widget") else config.S(100)
+        max_txt_w = max(0, int(w - 2 * self._PAD - zoom_w - config.S(12) - 2 * badge_pad_x - dot_d - dot_gap))
+        chip = self._story_label or self._clip_name
+        clip_label = fm.elidedText(chip, Qt.ElideRight, max_txt_w)
         txt_w = fm.horizontalAdvance(clip_label)
-        txt_h = fm.height()
 
-        badge_pad_x = float(config.S(6))
-        badge_pad_y = float(config.S(2))
         badge_rect = QRectF(
-            rx + float(config.S(8)),
-            ry + rh - float(config.S(6)) - txt_h - 2 * badge_pad_y,
-            txt_w + 2 * badge_pad_x,
-            txt_h + 2 * badge_pad_y,
+            float(self._PAD),
+            float(self._header_top()),
+            badge_pad_x * 2 + dot_d + dot_gap + txt_w,
+            pill_h,
         )
-
         badge_path = QPainterPath()
-        badge_path.addRoundedRect(badge_rect, config.S(3), config.S(3))
-        painter.fillPath(badge_path, qc(10, 22, 15, 210))
-        painter.setPen(QPen(qc("#245437"), 1.0))
+        badge_r = pill_h / 2.0
+        badge_path.addRoundedRect(badge_rect.adjusted(0.5, 0.5, -0.5, -0.5), badge_r, badge_r)
+        painter.fillPath(badge_path, qc("#2a2a2a"))
+        painter.setPen(QPen(qc("#303030"), 1.0))
         painter.drawPath(badge_path)
 
-        painter.setPen(qc("#c8e6d2"))
-        painter.drawText(badge_rect, Qt.AlignCenter, clip_label)
+        # Dot in the waveform's colour ties the chip to the track
+        dot_col = qc(config.BTN_BG).lighter(118) if modern else RESOLVE_CLIP_COLORS["normal"].lighter(150)
+        if self._story_runs is None and self._story_label:
+            dot_col = qc("#f59e0b")               # the Recording switch is on: the chip says so in amber
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(dot_col))
+        painter.drawEllipse(QRectF(badge_rect.x() + badge_pad_x, badge_rect.center().y() - dot_d / 2.0, dot_d, dot_d))
+        painter.setBrush(Qt.NoBrush)
+
+        painter.setPen(qc("#d4d4d4"))
+        text_rect = QRectF(badge_rect.x() + badge_pad_x + dot_d + dot_gap, badge_rect.y(), txt_w + 1.0, pill_h)
+        painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, clip_label)
 
         painter.end()
 
@@ -842,21 +1053,23 @@ class WaveformTimelineWidget(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         sb_h = config.S(7)
-        m_x = config.S(8)
+        m_x = self._PAD
         if hasattr(self, 'scrollbar'):
             self.scrollbar.setGeometry(
                 m_x,
-                self.height() - sb_h - config.S(3),
+                self.height() - sb_h - self._PAD,
                 max(10, self.width() - 2 * m_x),
                 sb_h,
             )
             self._sync_scrollbar()
         if hasattr(self, 'zoom_ctrl_widget'):
-            ctrl_w = config.S(80)
-            ctrl_h = config.S(18)
-            self.zoom_ctrl_widget.setGeometry(
-                self.width() - ctrl_w - config.S(12),
-                config.S(2),
+            # Header row, right: sized to the three pills
+            ctrl = self.zoom_ctrl_widget
+            ctrl_w = max(ctrl.sizeHint().width(), ctrl.layout().sizeHint().width() if ctrl.layout() else 0)
+            ctrl_h = self._PILL_H
+            ctrl.setGeometry(
+                self.width() - ctrl_w - self._PAD,
+                self._header_top(),
                 ctrl_w,
                 ctrl_h,
             )
@@ -905,6 +1118,24 @@ class WaveformTimelineWidget(QWidget):
         ry = clip_rect.y()
         rw = clip_rect.width()
         rh = clip_rect.height()
+
+        # 1b. Story cuts: a small violet flag at each, clickable (opens the cut in Review)
+        marks = self._story_cut_marks() if self._story_runs is not None else getattr(self, '_cut_marks', None)
+        if marks and self._duration > 0:
+            vis_dur = self.visible_duration()
+            fh = float(config.S(12))
+            for t, n in marks:
+                if not (self._view_start_time <= t <= self._view_start_time + vis_dur):
+                    continue
+                mx = rx + ((t - self._view_start_time) / vis_dur) * rw
+                painter.setPen(QPen(QColor(168, 85, 247, 170), 1.0))
+                painter.drawLine(QPointF(mx, ry), QPointF(mx, ry + rh))
+                flag = QPainterPath()
+                flag.moveTo(mx, ry + 1)
+                flag.lineTo(mx + fh * 0.9, ry + 1 + fh / 2)
+                flag.lineTo(mx, ry + 1 + fh)
+                flag.closeSubpath()
+                painter.fillPath(flag, QColor(168, 85, 247, 230))
 
         # 2. Draw Red Playhead (matching Screenshot 1: vertical red line + top red circular pin marker)
         if self._duration > 0:
@@ -962,6 +1193,10 @@ class WaveformTimelineWidget(QWidget):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
+            n = self._cut_mark_at(event.position().x(), event.position().y())
+            if n is not None:
+                self.cut_mark_clicked.emit(n)
+                return
             clip_rect = self._get_clip_rect()
             if clip_rect.contains(event.position()) and self._duration > 0:
                 self._is_scrubbing = True
@@ -1012,10 +1247,7 @@ class WaveformTimelineWidget(QWidget):
         self._playhead_time = target_t
         self.update()
 
-        # Local immediate seek (60 FPS playback / video frame update)
+        # Local immediate seek (60 FPS playback / video frame update). The player maps story time back to
+        # the recording, and moves Resolve's playhead too on Ctrl/Alt + click (with the recording's time)
         self.seek_requested.emit(target_t, sync_resolve)
-
-        # DaVinci Resolve seek: ONLY when explicit shortcut (Ctrl + click) was triggered!
-        if sync_resolve and self.main_window and hasattr(self.main_window, "_jump_playhead"):
-            self.main_window._jump_playhead(target_t)
 

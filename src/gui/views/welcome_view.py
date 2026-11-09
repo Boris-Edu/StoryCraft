@@ -45,6 +45,22 @@ BRAND_INK = "#0b0b14"      # text on the brand gradient
 _GRAD = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {0}, stop:1 {1})"
 
 
+
+def _quiet_link(text, tip):
+    """A quiet accent-coloured link button (an alternative, not a second primary)."""
+    b = QPushButton(text)
+    b.setObjectName("QuietLink")
+    b.setCursor(Qt.PointingHandCursor)
+    b.setToolTip(tip)
+    b.setFixedHeight(config.S(30))
+    b.setStyleSheet(f"""
+        QPushButton#QuietLink {{ background-color: transparent; color: #a3a3a3; font-family: "{config.UI_FONT_NAME}";
+            font-size: {config.FS(9.5)}pt; font-weight: 500; border: none; border-radius: {config.S(15)}px;
+            padding: 0 {config.S(14)}px; }}
+        QPushButton#QuietLink:hover {{ color: {config.BTN_BG}; background-color: #1e1e1e; }}
+    """)
+    return b
+
 def card_radius() -> int:
     return config.S(16)
 
@@ -1195,10 +1211,12 @@ class WelcomePageView(QWidget):
         h_mode.addWidget(win.welcome_mode_switch)
         h_mode.addStretch()
         self.root_layout.addLayout(h_mode)
-        gap_switch = config.S(16)
-        self.root_layout.addSpacing(gap_switch)
+        # Transcript first: silence detection isn't a peer mode any more, it's an option inside the form
+        # ("Skip the transcript: cut pauses only"); the switch stays as the animation's state holder, hidden
+        win.welcome_mode_switch.hide()
+        gap_switch = 0
         # The header's real height (used to centre the whole screen vertically)
-        self.H_HEADER = win.welcome_title.height() + gap_title + win.welcome_mode_switch.height() + gap_switch
+        self.H_HEADER = win.welcome_title.height() + gap_title
 
         # ── 3. Workspace Stack Area ───────────────────────────────────────────
         self.workspace_container = QWidget(self.welcome_root)
@@ -1253,6 +1271,19 @@ class WelcomePageView(QWidget):
                     w.ensurePolished()
                     if w.layout():
                         w.layout().activate()
+            # The content budget was a fixed S(600): with larger text (Settings > Text size) the
+            # card's rows need more, and a squeezed layout drew the drop zone over the next label.
+            # Grow it to what the workspaces actually need.
+            need = 0
+            for i in range(self.win.welcome_stack.count()):
+                w = self.win.welcome_stack.widget(i)
+                if w is not None and w.layout() is not None:
+                    need = max(need, w.layout().sizeHint().height())
+            if need + config.S(12) > self.H_MAX_CONTENT:
+                self.H_MAX_CONTENT = need + config.S(12)
+                self.workspace_container.setFixedHeight(self.H_MAX_CONTENT)
+                self.win.welcome_stack.setFixedHeight(self.H_MAX_CONTENT)
+                self.resizeEvent(None)
         if hasattr(self.win, '_sync_script_edit_height'):
             self.win._sync_script_edit_height(animated=False)
 
@@ -1905,6 +1936,7 @@ def build_welcome_view(win) -> QWidget:
     btn_import.setStyleSheet(secondary_button_qss("QPushButton#btn_ghost"))
     btn_import.clicked.connect(win._on_import_project)
     btn_row_t.addWidget(btn_import)
+    btn_import.hide()   # Home has "Import a project file": no second import here
 
     btn_analyze = QPushButton(win.txt("btn_analyze"))
     btn_analyze.setObjectName("btn_primary")
@@ -1965,6 +1997,17 @@ def build_welcome_view(win) -> QWidget:
     row_saved.addWidget(win.btn_open_saved)
     row_saved.addStretch()
     l_trans.addLayout(row_saved)
+    # Silence detection without words: an option of this form, not a mode beside it
+    win.btn_skip_transcript = _quiet_link(win.txt("start_skip_transcript", "Skip the transcript: cut pauses only  →"),
+                                          win.txt("tt_start_skip_transcript", "Detect and cut the silences without "
+                                                  "transcribing (no story, no text to edit)"))
+    win.btn_skip_transcript.clicked.connect(lambda: win.welcome_page.switch_workspace_animated(1))
+    row_skip = QHBoxLayout()
+    row_skip.setContentsMargins(0, config.S(6), 0, 0)
+    row_skip.addStretch()
+    row_skip.addWidget(win.btn_skip_transcript)
+    row_skip.addStretch()
+    l_trans.addLayout(row_skip)
     l_trans.addStretch()
 
     win.welcome_stack.addWidget(p_transcription)
@@ -2216,6 +2259,16 @@ def build_welcome_view(win) -> QWidget:
     btn_row_fs.addWidget(win.btn_run_fs)
 
     l_fast.addLayout(btn_row_fs)
+    win.btn_back_transcribe = _quiet_link(win.txt("start_back_transcribe", "←  Transcribe instead"),
+                                          win.txt("tt_start_back_transcribe", "Back to transcribing: the transcript "
+                                                  "is what the story is built from"))
+    win.btn_back_transcribe.clicked.connect(lambda: win.welcome_page.switch_workspace_animated(0))
+    row_back = QHBoxLayout()
+    row_back.setContentsMargins(0, config.S(8), 0, 0)
+    row_back.addStretch()
+    row_back.addWidget(win.btn_back_transcribe)
+    row_back.addStretch()
+    l_fast.addLayout(row_back)
     l_fast.addStretch()
 
     win.welcome_stack.addWidget(p_silence_outer)

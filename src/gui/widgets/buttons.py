@@ -941,6 +941,7 @@ class AnimatedPlayerButton(QPushButton):
         self._anim = QPropertyAnimation(self, b"iconSize")
         self._anim.setDuration(100)
         
+        self._needs_pixmap_rebuild = False  # gui/theme.set_theme raises it: the glyph set depends on the theme
         self.update_icon(icon_name)
 
     def enterEvent(self, event):
@@ -954,6 +955,10 @@ class AnimatedPlayerButton(QPushButton):
         super().leaveEvent(event)
 
     def paintEvent(self, event):
+        if getattr(self, '_needs_pixmap_rebuild', False):
+            self._needs_pixmap_rebuild = False
+            if getattr(self, '_icon_name', None):
+                self.update_icon(self._icon_name)
         if getattr(self, 'is_circle', False):
             from PySide6.QtGui import QPainter, QColor
             from PySide6.QtCore import Qt
@@ -987,6 +992,7 @@ class AnimatedPlayerButton(QPushButton):
     def update_icon(self, icon_name):
         from PySide6.QtGui import QIcon
         from ..utils import get_layout_icon_path
+        self._icon_name = icon_name
         path = get_layout_icon_path(icon_name)
         
         from PySide6.QtGui import QPixmap
@@ -2395,7 +2401,7 @@ class AssembleSplitButton(QFrame):
             if hasattr(self.parent_gui, 'txt'):
                 self.btn_main.setText(self.parent_gui.txt("btn_assemble"))
             else:
-                self.btn_main.setText("Assemble")
+                self.btn_main.setText("Send to Resolve")
 
         r = config.S(4)
         if not enabled:

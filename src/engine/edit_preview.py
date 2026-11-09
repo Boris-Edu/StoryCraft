@@ -192,3 +192,132 @@ class EditPreviewRender:
             self.done = True
         except Exception as ex:
             self.error = str(ex)
+
+
+# ----------------------------------------------------------------------
+# The story's own clock
+# ----------------------------------------------------------------------
+class StoryMap:
+    """
+    One clock for the story as it plays (and as Send to Resolve builds it): the kept source ranges in play
+    order, laid end to end, with the voice patches in it at their real length.
+
+        m = StoryMap([(start_s, end_s), ...], patches=[(a, b, new_len, tag), ...])
+        m.length                       seconds the story lasts
+        m.runs                         [(story_start, story_end, src_start, src_end, tag)], play order;
+                                       tag None = the recording, else the patch's tag (it plays instead of
+                                       [src_start, src_end]: a "close" patch at its own length new_len, a
+                                       "keep" patch at the span's length)
+        m.to_story(t, hint) -> (T, i)  story time of source time t (None outside the story); i = run index,
+                                       pass it back as hint so a moment shared by two runs stays in the one
+                                       playing
+        m.to_source(T) -> (t, i)       source time at story time T (inside a patch: where the playhead is
+                                       in its span, as the player shows it)
+        m.snap(t)                      the nearest moment of the story to source time t (source time)
+        m.piece_bounds()               story times where the story jumps to another part of the recording
+    Pure Python (bisect), so it stays quick for long interviews (thousands of runs).
+    """
+
+    def __init__(self, segments, patches=()):
+        import bisect
+        self._bisect = bisect
+        segs = [(float(s), float(e)) for s, e in (segments or []) if float(e) - float(s) > 1e-3]
+        todo = sorted(((float(a), float(b), float(n), tag) for a, b, n, tag in (patches or []) if b > a),
+                      key=lambda p: p[0])
+        placed = set()
+        runs, pos = [], 0.0
+        for s, e in segs:
+            cur = s
+            for k, (a, b, n, tag) in enumerate(todo):
+                if k in placed or not (max(a, s) < min(b, e) - 1e-3):
+                    continue
+                ps, pe = max(a, s, cur), min(b, e)
+                if pe <= ps:
+                    continue
+                placed.add(k)
+                if ps > cur:
+                    runs.append((pos, pos + ps - cur, cur, ps, None))
+                    pos += ps - cur
+                ln = max(0.0, n * (pe - ps) / (b - a))
+                runs.append((pos, pos + ln, ps, pe, tag))
+                pos += ln
+                cur = pe
+            if e > cur + 1e-4:
+                runs.append((pos, pos + e - cur, cur, e, None))
+                pos += e - cur
+        self.runs = runs
+        self.length = pos
+        self.segments = segs
+        self._starts = [r[0] for r in runs]
+        by_src = sorted(range(len(runs)), key=lambda i: runs[i][2])
+        self._src_order = by_src
+        self._src_starts = [runs[i][2] for i in by_src]
+
+    def __bool__(self):
+        return bool(self.runs)
+
+    @staticmethod
+    def _within(r, t, lead=0.03, tail=0.0):
+        return r[2] - lead <= t < r[3] + tail
+
+    def _story_of(self, r, t):
+        e0, e1, s, e, tag = r
+        t = min(max(t, s), e)
+        if tag is None or e <= s:
+            return e0 + (t - s)
+        return e0 + (t - s) / (e - s) * (e1 - e0)
+
+    def to_story(self, t, hint=None):
+        if t is None or not self.runs:
+            return None, None
+        t = float(t)
+        runs = self.runs
+        if hint is not None and 0 <= hint < len(runs):
+            # the run playing, or the one after it in play order (a frame past a boundary)
+            if self._within(runs[hint], t, 0.03, 0.02):
+                return self._story_of(runs[hint], t), hint
+            if hint + 1 < len(runs) and self._within(runs[hint + 1], t, 0.03, 0.0):
+                return self._story_of(runs[hint + 1], t), hint + 1
+        j = self._bisect.bisect_right(self._src_starts, t + 0.03) - 1
+        for lead in (0.0, 0.03):                    # a run holding t itself first, then frame rounding
+            for jj in (j, j - 1):
+                if 0 <= jj < len(self._src_order):
+                    i = self._src_order[jj]
+                    if self._within(runs[i], t, lead, 0.0):
+                        return self._story_of(runs[i], t), i
+        return None, None
+
+    def to_source(self, T):
+        if not self.runs:
+            return None, None
+        T = max(0.0, min(float(T), self.length))
+        i = max(0, self._bisect.bisect_right(self._starts, T) - 1)
+        while i + 1 < len(self.runs) and self.runs[i][1] <= T and self.runs[i + 1][0] <= T:
+            i += 1                                  # skip empty runs
+        e0, e1, s, e, tag = self.runs[i]
+        if tag is None or e1 <= e0:
+            return min(e, s + (T - e0)), i
+        return s + (T - e0) / (e1 - e0) * (e - s), i
+
+    def snap(self, t):
+        """The story moment nearest to source time t (t itself when it is in the story)."""
+        if not self.runs:
+            return t
+        best = None
+        for e0, e1, s, e, tag in self.runs:
+            if s - 0.03 <= t < e:
+                return t
+            d, p = (s - t, s) if t < s else (t - e, max(s, e - 0.05))
+            if best is None or d < best[0] - 1e-6:
+                best = (d, p)
+        return best[1]
+
+    def piece_bounds(self):
+        """Story times where a new piece of the recording starts (a jump in the source)."""
+        out = []
+        prev = None
+        for e0, e1, s, e, tag in self.runs:
+            if prev is not None and abs(s - prev) > 0.02:
+                out.append(e0)
+            prev = e
+        return out

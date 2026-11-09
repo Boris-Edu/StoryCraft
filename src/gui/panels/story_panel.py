@@ -25,10 +25,18 @@ from PySide6.QtWidgets import (
 import config
 from gui.widgets.labels import QLabel
 from gui.widgets.buttons import QPushButton
-from .script_panel import wrap_activity_panel
+from .script_panel import (wrap_activity_panel, panel_margins, panel_card, heading_css, caption_css, sublabel_css,
+                           quiet_button, quiet_button_css, input_css, style_segmented, hairline, ButtonFlow,
+                           card_css, text_px)
 
 BLOCK_ROLE = Qt.UserRole + 1
-MAX_TEXT_LINES = 4
+MAX_TEXT_LINES = 3
+
+# Block card geometry (px): the gap between cards, the inner padding, the header-to-text gap
+_GAP = 3
+_PAD_X = 11
+_PAD_Y = 8
+_HEAD_GAP = 4
 
 
 def _decode(value):
@@ -50,20 +58,31 @@ def _mmss(seconds):
 
 
 class _BlockDelegate(QStyledItemDelegate):
-    """Paints a block as a card: IDs and length on top, what is said underneath."""
+    """Paints a block as a card: drag handle, IDs, clarity and length on top, what is said underneath
+    (up to MAX_TEXT_LINES lines)."""
 
     def __init__(self, board, view):
         super().__init__(view)
         self.board = board
         self.view = view
 
+    def _head_font(self):
+        f = QFont(self.view.font())
+        f.setPointSizeF(max(7.0, f.pointSizeF() * 0.86))
+        f.setWeight(QFont.DemiBold)
+        return f
+
     def _text_rect_width(self):
         # Always leave room for the scrollbar: it appears after the heights are measured
         sb = self.view.verticalScrollBar().sizeHint().width()
-        return max(60, self.view.width() - sb - config.S(28))
+        inner = self.view.width() - 2 * self.view.frameWidth() - sb
+        return max(60, inner - 2 * config.S(_GAP) - 2 * config.S(_PAD_X))
 
     def _body(self, block):
         return self.board.block_text(block)
+
+    def _head_h(self):
+        return QFontMetrics(self._head_font()).height() + config.S(6)
 
     def sizeHint(self, option, index):
         block = _decode(index.data(BLOCK_ROLE))
@@ -73,7 +92,17 @@ class _BlockDelegate(QStyledItemDelegate):
         w = self._text_rect_width()
         body_h = fm.boundingRect(0, 0, w, 10000, Qt.TextWordWrap, self._body(block)).height()
         body_h = min(body_h, fm.lineSpacing() * MAX_TEXT_LINES)
-        return QSize(w, body_h + fm.lineSpacing() + config.S(22))
+        return QSize(w, body_h + self._head_h() + config.S(_HEAD_GAP) + 2 * config.S(_PAD_Y) + 2 * config.S(_GAP))
+
+    def _pill(self, painter, rect, text, font, fg, bg):
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        painter.setFont(font)
+        painter.setPen(fg)
+        painter.drawText(rect, Qt.AlignCenter, text)
+        painter.restore()
 
     def paint(self, painter, option, index):
         block = _decode(index.data(BLOCK_ROLE))
@@ -81,82 +110,85 @@ class _BlockDelegate(QStyledItemDelegate):
             return
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        r = QRectF(option.rect).adjusted(config.S(3), config.S(3), -config.S(3), -config.S(2))
+        g = config.S(_GAP)
+        r = QRectF(option.rect).adjusted(g, g, -g, -g)
         selected = bool(option.state & QStyle.State_Selected)
+        hovered = bool(option.state & QStyle.State_MouseOver)
         playing = self.board.is_playing_block(block)
-        painter.setPen(QPen(qc(config.BTN_BG) if (selected or playing) else qc("#3a3a3a"), 1.2))
-        painter.setBrush(qc("#2c3a31") if playing else qc("#262626"))
-        painter.drawRoundedRect(r, config.S(5), config.S(5))
+        accent = qc(config.BTN_BG)
+        card = qc("#2a2a2a") if hovered and not playing else qc("#262626")
+        if playing:
+            # The block that is playing: the card tinted with the accent
+            tint = QColor(accent)
+            card = QColor(int(card.red() * 0.8 + tint.red() * 0.2), int(card.green() * 0.8 + tint.green() * 0.2),
+                          int(card.blue() * 0.8 + tint.blue() * 0.2))
+        if selected or playing:
+            border = accent
+        else:
+            border = qc("#3a3a3a") if hovered else qc("#303030")
+        painter.setPen(QPen(border, 1.4 if (selected or playing) else 1.0))
+        painter.setBrush(card)
+        rad = config.S(10)
+        painter.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), rad, rad)
 
         fm = QFontMetrics(self.view.font())
-        pad = config.S(8)
-        head = QRectF(r.left() + pad, r.top() + config.S(5), r.width() - 2 * pad, fm.lineSpacing())
-        # Drag handle: two columns of three dots
+        hf = self._head_font()
+        hfm = QFontMetrics(hf)
+        pad_x, pad_y = config.S(_PAD_X), config.S(_PAD_Y)
+        head = QRectF(r.left() + pad_x, r.top() + pad_y, r.width() - 2 * pad_x, self._head_h())
+        # Drag handle: two columns of three dots, quiet until the card is hovered
         painter.setPen(Qt.NoPen)
-        painter.setBrush(qc("#5a5a5a"))
+        painter.setBrush(qc("#6a6a6a") if hovered or selected else qc("#4a4a4a"))
         dot = config.S(2.4)
-        cx, cy = head.left() + config.S(2), head.center().y()
-        for dx in (0, config.S(5)):
-            for dy in (-config.S(5), 0, config.S(5)):
+        cx, cy = head.left() + config.S(1.5), head.center().y()
+        for dx in (0, config.S(4.5)):
+            for dy in (-config.S(4.5), 0, config.S(4.5)):
                 painter.drawEllipse(QRectF(cx + dx - dot / 2, cy + dy - dot / 2, dot, dot))
-        label_rect = head.adjusted(config.S(14), 0, 0, 0)
-        painter.setPen(qc("#8a8a8a"))
-        painter.drawText(label_rect, Qt.AlignLeft | Qt.AlignVCenter, self.board.block_label(block))
+        painter.setFont(hf)
+        label = self.board.block_label(block)
+        label_rect = head.adjusted(config.S(13), 0, 0, 0)
+        painter.setPen(qc("#a3a3a3"))
+        painter.drawText(label_rect, Qt.AlignLeft | Qt.AlignVCenter, label)
+        tag_x = label_rect.left() + hfm.horizontalAdvance(label) + config.S(10)
         cl = self.board.block_clarity(block)
-        tag_x = label_rect.left() + fm.horizontalAdvance(self.board.block_label(block)) + config.S(10)
         if cl is not None:
             # Clarity: a small dot and number after the IDs (green clear, amber so-so, red hard to hear)
-            lw = fm.horizontalAdvance(self.board.block_label(block))
             dot_col = QColor("#3fb950" if cl >= 80 else ("#d29922" if cl >= 60 else "#f85149"))
-            cx0 = label_rect.left() + lw + config.S(10)
+            d = config.S(6)
             painter.setPen(Qt.NoPen)
             painter.setBrush(dot_col)
-            d = config.S(6)
-            painter.drawEllipse(QRectF(cx0, head.center().y() - d / 2, d, d))
+            painter.drawEllipse(QRectF(tag_x, head.center().y() - d / 2, d, d))
             painter.setPen(qc("#8a8a8a"))
-            painter.drawText(QRectF(cx0 + d + config.S(4), head.top(), config.S(40), head.height()),
+            painter.drawText(QRectF(tag_x + d + config.S(4), head.top(), hfm.horizontalAdvance(str(cl)) + 2, head.height()),
                              Qt.AlignLeft | Qt.AlignVCenter, str(cl))
-            tag_x = cx0 + d + config.S(10) + fm.horizontalAdvance(str(cl))
+            tag_x += d + config.S(4) + hfm.horizontalAdvance(str(cl)) + config.S(8)
+        small = QFont(hf)
+        small.setPointSizeF(max(6.0, hf.pointSizeF() * 0.88))
+        small.setBold(True)
+        sfm = QFontMetrics(small)
+        pill_h = head.height() - config.S(2)
         if self.board.block_avoid(block):
             # Tagged "Avoid" by the editor: an orange pill
             tag = self.board.win.txt("board_avoid")
-            small = QFont(painter.font())
-            small.setPointSizeF(max(6.0, small.pointSizeF() * 0.78))
-            small.setBold(True)
-            sfm = QFontMetrics(small)
-            tr = QRectF(tag_x, head.top() + 1, sfm.horizontalAdvance(tag) + config.S(10), head.height() - 2)
-            painter.save()
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(235, 110, 0, 60))
-            painter.drawRoundedRect(tr, tr.height() / 2, tr.height() / 2)
-            painter.setFont(small)
-            painter.setPen(QColor("#ff9d4d"))
-            painter.drawText(tr, Qt.AlignCenter, tag)
-            painter.restore()
+            tr = QRectF(tag_x, head.center().y() - pill_h / 2, sfm.horizontalAdvance(tag) + config.S(12), pill_h)
+            self._pill(painter, tr, tag, small, QColor("#ff9d4d"), QColor(235, 110, 0, 60))
+        # Length: a pill at the right end of the header
         dur = _mmss(self.board.block_duration(block))
-        painter.drawText(head, Qt.AlignRight | Qt.AlignVCenter, dur)
+        dw = hfm.horizontalAdvance(dur) + config.S(14)
+        dr = QRectF(head.right() - dw, head.center().y() - pill_h / 2, dw, pill_h)
+        self._pill(painter, dr, dur, hf, qc("#d4d4d4"), qc("#1e1e1e"))
         if playing:
             # "Playing" tag left of the length, in the accent colour
             tag = self.board.win.txt("board_playing")
-            small = painter.font()
-            small.setPointSizeF(max(6.0, small.pointSizeF() * 0.78))
-            small.setBold(True)
-            sfm = QFontMetrics(small)
-            tw = sfm.horizontalAdvance(tag) + config.S(10)
-            tr = QRectF(head.right() - fm.horizontalAdvance(dur) - config.S(8) - tw, head.top() + 1, tw, head.height() - 2)
-            painter.setPen(Qt.NoPen)
-            accent = qc(config.BTN_BG)
+            tw = sfm.horizontalAdvance(tag) + config.S(12)
+            tr = QRectF(dr.left() - config.S(6) - tw, dr.top(), tw, pill_h)
             soft = QColor(accent)
-            soft.setAlpha(50)
-            painter.setBrush(soft)
-            painter.drawRoundedRect(tr, tr.height() / 2, tr.height() / 2)
-            painter.setFont(small)
-            painter.setPen(accent.lighter(130))
-            painter.drawText(tr, Qt.AlignCenter, tag)
-            painter.setFont(self.view.font())
+            soft.setAlpha(60)
+            self._pill(painter, tr, tag, small, accent.lighter(135), soft)
 
-        body = QRectF(head.left(), head.bottom() + config.S(3), head.width(),
-                      r.bottom() - head.bottom() - config.S(8))
+        painter.setFont(self.view.font())
+        body = QRectF(head.left(), head.bottom() + config.S(_HEAD_GAP), head.width(),
+                      r.bottom() - pad_y - head.bottom() - config.S(_HEAD_GAP))
         text = self._body(block)
         lines_h = fm.boundingRect(0, 0, int(body.width()), 10000, Qt.TextWordWrap, text).height()
         if lines_h > body.height() + 1:
@@ -165,7 +197,7 @@ class _BlockDelegate(QStyledItemDelegate):
                                            text + "…").height() > body.height() + 1:
                 text = text[:max(0, int(len(text) * 0.92) - 1)].rstrip()
             text += "…"
-        painter.setPen(qc("#e6e6e6"))
+        painter.setPen(qc("#e6e6e6") if selected or hovered else qc("#d4d4d4"))
         painter.drawText(body, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, text)
         painter.restore()
 
@@ -184,11 +216,16 @@ class _BlockList(QListWidget):
         self.setSpacing(0)
         self.setItemDelegate(_BlockDelegate(board, self))
         self.setContextMenuPolicy(Qt.CustomContextMenu)
+        # Hover state for the cards (the delegate brightens the one under the mouse)
+        self.setMouseTracking(True)
+        self.viewport().setAttribute(Qt.WA_Hover, True)
+        # A recessed well holding the block cards
         self.setStyleSheet(f"""
-            QListWidget {{ background: #1b1b1b; border: 1px solid #303030; border-radius: {config.S(4)}px;
-                          outline: none; }}
+            QListWidget {{ background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: {config.S(12)}px;
+                          padding: {config.S(3)}px; outline: none; }}
             QListWidget::item {{ background: transparent; border: none; }}
             QListWidget::item:selected {{ background: transparent; }}
+            QListWidget::item:hover {{ background: transparent; }}
         """)
         self.model().rowsInserted.connect(board.schedule_sync)
         self.model().rowsRemoved.connect(board.schedule_sync)
@@ -214,26 +251,26 @@ class StoryBoard(QWidget):
         self.sentences = []
         self._syncing = False
         self._ops_ctx = None  # (ops, fps, offset) for block lengths after the cuts
+        self.story_changed = []  # callbacks(kind): "story" after every sync, "lengths" when block lengths change
         self._sync_timer = QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.setInterval(0)
         self._sync_timer.timeout.connect(self._sync_story)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(config.S(15), config.S(15), config.S(15), config.S(15))
-        lay.setSpacing(config.S(8))
+        panel_margins(lay, 10)
 
         row = QHBoxLayout()
         title = QLabel(win.txt("board_title"))
-        title.setStyleSheet(f"font-size: {config.FS(12)}pt; font-weight: bold;")
+        title.setStyleSheet(heading_css(12))
         row.addWidget(title)
         row.addStretch()
         row.addWidget(win._create_info_icon("tt_board"))
         lay.addLayout(row)
 
-        # "From transcript" alone, then the External AI round trip in its own framed group, in the
-        # order it is used: Copy for AI -> (AI chat) -> Import AI edit, then Review cuts to refine.
-        # Full-width buttons, so long translations fit a narrow panel without being cut off.
+        # One card to build the edit: From transcript / From script, then the External AI round trip
+        # in the order it is used: Copy for AI -> (AI chat) -> Import AI edit, then Review cuts to
+        # refine, then the target length. Buttons share a row only when their labels fit whole.
         from PySide6.QtWidgets import QSizePolicy, QLineEdit
         self.btn_fill = QPushButton(win.txt("board_fill"))
         self.btn_fill.setToolTip(win.txt("tt_board_fill"))
@@ -247,132 +284,126 @@ class StoryBoard(QWidget):
         self.btn_review = QPushButton(win.txt("board_review_cuts"))
         self.btn_review.setToolTip(win.txt("tt_board_review_cuts"))
         self.btn_review.clicked.connect(lambda: win._on_review_cuts())
-        for b in (self.btn_fill, self.btn_copy_ai, self.btn_ai, self.btn_review):
-            b.setCursor(Qt.PointingHandCursor)
-            b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            b.setMinimumHeight(config.S(26))
-            b.setStyleSheet(f"""
-                QPushButton {{ background: #2a2a2a; color: #d0d0d0; border: 1px solid #3a3a3a;
-                    border-radius: {config.S(4)}px; padding: {config.S(3)}px {config.S(4)}px; font-size: {config.FS(8.5)}pt; }}
-                QPushButton:hover {{ color: #ffffff; border-color: #555; }}
-                QPushButton:disabled {{ color: #555; }}
-            """)
         self.btn_from_script = QPushButton(win.txt("board_from_script"))
         self.btn_from_script.setToolTip(win.txt("tt_board_from_script"))
         self.btn_from_script.clicked.connect(lambda: win._build_story_from_script())
-        self.btn_from_script.setCursor(Qt.PointingHandCursor)
-        self.btn_from_script.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.btn_from_script.setMinimumHeight(config.S(26))
-        self.btn_from_script.setStyleSheet(self.btn_fill.styleSheet())
-        fill_row = QHBoxLayout()
-        fill_row.setSpacing(config.S(6))
-        fill_row.addWidget(self.btn_fill)
-        fill_row.addWidget(self.btn_from_script)
-        lay.addLayout(fill_row)
+        for b in (self.btn_fill, self.btn_from_script, self.btn_copy_ai, self.btn_ai, self.btn_review):
+            b.setCursor(Qt.PointingHandCursor)
+            quiet_button(b, 9, 30, 5, 8)
 
-        ai_box = QFrame()
-        ai_box.setObjectName("externalAiGroup")
-        ai_box.setStyleSheet(f"""
-            QFrame#externalAiGroup {{ background: #1e1e1e; border: 1px solid #333333;
-                border-radius: {config.S(6)}px; }}
-        """)
-        ai_lay = QVBoxLayout(ai_box)
-        ai_lay.setContentsMargins(config.S(8), config.S(6), config.S(8), config.S(8))
-        ai_lay.setSpacing(config.S(6))
+        build_card, build_lay = panel_card(8)
+        build_lay.setContentsMargins(config.S(12), config.S(12), config.S(12), config.S(12))
+        build_lay.addWidget(ButtonFlow([self.btn_fill, self.btn_from_script], max_cols=2))
+        build_lay.addSpacing(config.S(2))
         ai_head = QHBoxLayout()
         ai_title = QLabel(win.txt("group_external_ai").upper())
-        ai_title.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(8)}pt; font-weight: bold;"
-                               f" letter-spacing: 1px; background: transparent; border: none;")
+        ai_title.setStyleSheet(caption_css())
         ai_head.addWidget(ai_title)
         ai_head.addStretch()
         ai_head.addWidget(win._create_info_icon("tt_group_external_ai"))
-        ai_lay.addLayout(ai_head)
-        for b in (self.btn_copy_ai, self.btn_ai, self.btn_review):  # one per row, in the order they're used
-            ai_lay.addWidget(b)
-        lay.addWidget(ai_box)
+        build_lay.addLayout(ai_head)
+        build_lay.addWidget(ButtonFlow([self.btn_copy_ai, self.btn_ai, self.btn_review], max_cols=3))
+        build_lay.addSpacing(config.S(2))
+        build_lay.addWidget(hairline())
 
         # Target length for the AI (and to compare the edit against)
         row_t = QHBoxLayout()
-        row_t.setSpacing(config.S(6))
+        row_t.setSpacing(config.S(8))
         lbl_t = QLabel(win.txt("board_target"))
-        lbl_t.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(9)}pt;")
-        row_t.addWidget(lbl_t)
+        lbl_t.setWordWrap(True)
+        lbl_t.setStyleSheet(f"color: #d4d4d4; font-size: {config.FS(9.5)}pt; background: transparent;")
+        row_t.addWidget(lbl_t, 1)
         self.edit_target = QLineEdit()
         self.edit_target.setPlaceholderText("2:00")
         self.edit_target.setToolTip(win.txt("tt_board_target"))
-        self.edit_target.setFixedWidth(config.S(64))
-        self.edit_target.setStyleSheet(f"""QLineEdit {{ background: #1e1e1e; color: #e6e6e6; border: 1px solid #3a3a3a;
-            border-radius: {config.S(4)}px; padding: {config.S(2)}px {config.S(6)}px; }}""")
+        self.edit_target.setFixedWidth(config.TS(72))
+        self.edit_target.setFixedHeight(max(config.S(28), text_px(9.5) + 2 * config.S(4) + 2))
+        self.edit_target.setAlignment(Qt.AlignCenter)
+        self.edit_target.setStyleSheet(input_css("QLineEdit", 9.5))
         cur = (win.engine.load_preferences() or {}).get('story_target_s')
         if cur:
             self.edit_target.setText(_mmss(cur))
         self.edit_target.editingFinished.connect(self._on_target_changed)
         row_t.addWidget(self.edit_target)
-        row_t.addStretch()
-        lay.addLayout(row_t)
+        build_lay.addLayout(row_t)
+        lay.addWidget(build_card)
 
         # EDIT · blocks · length (wraps rather than being cut), with Clear for the edit list
         self.lbl_edit = QLabel("")
         self.lbl_edit.setWordWrap(True)
-        self.lbl_edit.setStyleSheet(f"color: #b0b0b0; font-size: {config.FS(9)}pt; font-weight: bold;")
+        self.lbl_edit.setStyleSheet(self._caption_style("#8a8a8a"))
         row_e = QHBoxLayout()
+        row_e.setContentsMargins(config.S(2), config.S(4), 0, 0)
         row_e.setSpacing(config.S(6))
         row_e.addWidget(self.lbl_edit, 1)
         self.btn_clear = QPushButton(win.txt("btn_story_clear"))
         self.btn_clear.clicked.connect(self.clear_edit)
         self.btn_clear.setCursor(Qt.PointingHandCursor)
+        _clear_h = text_px(8.5) + 2 * config.S(3) + 2
+        self.btn_clear.setFixedHeight(_clear_h)
         self.btn_clear.setStyleSheet(f"""
-            QPushButton {{ background: transparent; color: #a0a0a0; border: 1px solid #3a3a3a;
-                border-radius: {config.S(4)}px; padding: {config.S(2)}px {config.S(6)}px; font-size: {config.FS(8.5)}pt; }}
-            QPushButton:hover {{ color: #ffffff; border-color: #555; }}
+            QPushButton {{ background: #2a2a2a; color: #a3a3a3; border: 1px solid #333333;
+                border-radius: {max(1, _clear_h // 2 - 1)}px; padding: 0 {config.S(10)}px; font-size: {config.FS(8.5)}pt; }}
+            QPushButton:hover {{ color: #ffffff; background: #333333; }}
+            QPushButton:disabled {{ color: #6a6a6a; background: transparent; border-color: #2a2a2a; }}
         """)
-        row_e.addWidget(self.btn_clear, 0, Qt.AlignTop)
+        row_e.addWidget(self.btn_clear, 0, Qt.AlignVCenter)
         lay.addLayout(row_e)
         self.lbl_empty = QLabel(win.txt("board_empty"))
         self.lbl_empty.setWordWrap(True)
-        self.lbl_empty.setStyleSheet(f"color: #777777; font-size: {config.FS(9)}pt;")
+        self.lbl_empty.setStyleSheet(sublabel_css(9))
         lay.addWidget(self.lbl_empty)
         self.list_edit = _BlockList(self)
+        # Never squeezed below about two cards: the panel scrolls instead when the window is short
+        self.list_edit.setMinimumHeight(config.TS(170))
         lay.addWidget(self.list_edit, 3)
 
         self.lbl_unused = QLabel("")
-        self.lbl_unused.setStyleSheet(f"color: #b0b0b0; font-size: {config.FS(9)}pt; font-weight: bold;")
+        self.lbl_unused.setWordWrap(True)
+        self.lbl_unused.setContentsMargins(config.S(2), config.S(4), 0, 0)
+        self.lbl_unused.setStyleSheet(self._caption_style("#8a8a8a"))
         lay.addWidget(self.lbl_unused)
         self.list_unused = _BlockList(self)
+        self.list_unused.setMinimumHeight(config.TS(130))
         lay.addWidget(self.list_unused, 2)
 
         # Every edit cut from this source timeline: load one to continue from it
         from gui.widgets.segmented import SegmentedChoice
         self.edits_box = QFrame()
         self.edits_box.setObjectName("editsBox")
-        self.edits_box.setStyleSheet(f"""
-            QFrame#editsBox {{ background: #1e1e1e; border: 1px solid #333333; border-radius: {config.S(6)}px; }}
-        """)
+        self.edits_box.setStyleSheet(card_css("editsBox"))
         eb = QVBoxLayout(self.edits_box)
-        eb.setContentsMargins(config.S(8), config.S(6), config.S(8), config.S(8))
-        eb.setSpacing(config.S(4))
+        eb.setContentsMargins(config.S(12), config.S(10), config.S(12), config.S(12))
+        eb.setSpacing(config.S(6))
         eh = QHBoxLayout()
+        eh.setSpacing(config.S(6))
         et = QLabel(win.txt("edits_title").upper())
-        et.setStyleSheet(f"color: #a0a0a0; font-size: {config.FS(8)}pt; font-weight: bold; letter-spacing: 1px;"
-                         f" background: transparent; border: none;")
-        eh.addWidget(et)
-        eh.addWidget(win._create_info_icon("tt_edits_title"))
-        eh.addStretch()
+        et.setWordWrap(True)
+        et.setStyleSheet(caption_css())
+        eh.addWidget(et, 1)
+        eh.addWidget(win._create_info_icon("tt_edits_title"), 0, Qt.AlignVCenter)
+        eb.addLayout(eh)
+        # Sort order under the title (beside it, the title broke into three lines in a narrow panel)
         self.edits_sort = SegmentedChoice([("date", win.txt("edits_newest")), ("length", win.txt("edits_longest"))],
                                           "date", compact=True)
+        style_segmented(self.edits_sort.buttons.values(), 8.5)
         self.edits_sort.changed.connect(lambda _m: self.refresh_edits())
-        eh.addWidget(self.edits_sort)
-        eb.addLayout(eh)
+        eb.addWidget(self.edits_sort, 0, Qt.AlignLeft)
         self.edits_rows = QVBoxLayout()
         self.edits_rows.setSpacing(config.S(2))
         eb.addLayout(self.edits_rows)
         self.lbl_source_backup = QLabel("")
         self.lbl_source_backup.setWordWrap(True)
-        self.lbl_source_backup.setStyleSheet(f"color: #808080; font-size: {config.FS(8)}pt; background: transparent; border: none;")
+        self.lbl_source_backup.setStyleSheet(f"color: #8a8a8a; font-size: {config.FS(8.5)}pt; background: transparent; border: none;")
         eb.addWidget(self.lbl_source_backup)
         lay.addWidget(self.edits_box)
 
         self._refresh_labels()
+
+    @staticmethod
+    def _caption_style(color):
+        return (f"color: {color}; font-size: {config.FS(8.5)}pt; font-weight: 600; letter-spacing: 1px;"
+                f" background: transparent;")
 
     # ------------------------------------------------------------------ data
     def block_text(self, block):
@@ -386,8 +417,35 @@ class StoryBoard(QWidget):
 
     def block_clip(self, block):
         f, l = block
-        return {"cut_start": self.sentences[f]["cut_start"], "cut_end": self.sentences[l]["cut_end"],
+        clip = {"cut_start": self.sentences[f]["cut_start"], "cut_end": self.sentences[l]["cut_end"],
                 "start_id": self.sentences[f]["id"], "end_id": self.sentences[l]["id"]}
+        air = self.air_for(block)
+        if air:  # pause override at this block's edges (Review: tighter / airier), seconds of air
+            clip["air"] = dict(air)
+            clip["src_start"] = self.sentences[f].get("src_start", clip["cut_start"])
+            clip["src_end"] = self.sentences[l].get("src_end", clip["cut_end"])
+        return clip
+
+    # Pause at a cut: seconds of air kept after a block's last word ("tail") / before its first ("lead")
+    def air_for(self, block):
+        return (getattr(self, "edge_air", None) or {}).get(f"{block[0]}-{block[1]}") or {}
+
+    def set_air(self, block, lead=None, tail=None):
+        """Change one block's edges (None = leave as is, 'auto' = back to the default)."""
+        air = dict(getattr(self, "edge_air", None) or {})
+        key = f"{block[0]}-{block[1]}"
+        cur = dict(air.get(key) or {})
+        for side, v in (("lead", lead), ("tail", tail)):
+            if v == "auto":
+                cur.pop(side, None)
+            elif v is not None:
+                cur[side] = float(v)
+        if cur:
+            air[key] = cur
+        else:
+            air.pop(key, None)
+        self.edge_air = air
+        self._sync_story()
 
     def block_avoid(self, block):
         return any(s.get("avoid") for s in self.sentences[block[0]:block[1] + 1])
@@ -426,6 +484,9 @@ class StoryBoard(QWidget):
 
     def edit_blocks(self):
         return [_decode(self.list_edit.item(i).data(BLOCK_ROLE)) for i in range(self.list_edit.count())]
+
+    def unused_blocks(self):
+        return [_decode(self.list_unused.item(i).data(BLOCK_ROLE)) for i in range(self.list_unused.count())]
 
     def _make_item(self, block):
         it = QListWidgetItem(f"{block[0]:06d}")  # sort key only; the delegate paints the card
@@ -487,6 +548,34 @@ class StoryBoard(QWidget):
         if not self._syncing:
             self._sync_timer.start()
 
+    def _undo_snapshot(self):
+        return {"sentences": self.sentences, "air": dict(getattr(self, "edge_air", None) or {}),
+                "edit": [tuple(b) for b in self.edit_blocks()],
+                "unused": [tuple(_decode(self.list_unused.item(i).data(BLOCK_ROLE))) for i in range(self.list_unused.count())]}
+
+    def _undo_restore(self, snap):
+        self._undo_restoring = True
+        try:
+            self.edge_air = dict(snap.get("air") or {})
+            self.load(snap["sentences"] or [], list(snap["edit"]), list(snap["unused"]))
+            self._sync_story()
+        finally:
+            self._undo_restoring = False
+        self._undo_last = self._undo_snapshot()
+
+    def _record_undo(self):
+        """After a change: the board as it was goes on the undo history (not when a timeline opens)."""
+        snap = self._undo_snapshot()
+        last = getattr(self, '_undo_last', None)
+        if last is None:  # nothing restored for this timeline yet: the change started from an empty board
+            last = {"sentences": [], "edit": [], "unused": [], "air": {}}
+        if (last is not None and not getattr(self, '_undo_restoring', False)
+                and (snap["edit"], snap["unused"], len(snap["sentences"] or []), snap.get("air") or {}) !=
+                    (last["edit"], last["unused"], len(last["sentences"] or []), last.get("air") or {})
+                and getattr(self.win, 'undo_manager', None) is not None):
+            self.win.undo_manager.push_state(self._undo_snapshot, self._undo_restore, last)
+        self._undo_last = snap
+
     def _sync_story(self):
         self._syncing = True
         try:
@@ -497,6 +586,15 @@ class StoryBoard(QWidget):
         self.win._set_story_from_board([self.block_clip(b) for b in blocks] if blocks else None)
         self._refresh_labels()
         self._save()
+        self._record_undo()
+        self._notify("story")
+
+    def _notify(self, kind):
+        for fn in list(self.story_changed):
+            try:
+                fn(kind)
+            except Exception as e:
+                print(f"[story board] listener failed: {e}")
 
     # ------------------------------------------------------------------ persistence
     def _path(self):
@@ -514,7 +612,7 @@ class StoryBoard(QWidget):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"version": 1, "sentences": self.sentences,
+                json.dump({"version": 1, "sentences": self.sentences, "air": getattr(self, "edge_air", None) or {},
                            "edit": [list(b) for b in self.edit_blocks()], "unused": [list(b) for b in unused]}, f)
         except Exception:
             pass
@@ -535,7 +633,7 @@ class StoryBoard(QWidget):
         if not entries:
             empty = QLabel(self.win.txt("edits_empty"))
             empty.setWordWrap(True)
-            empty.setStyleSheet(f"color: #777777; font-size: {config.FS(8.5)}pt; background: transparent; border: none;")
+            empty.setStyleSheet(sublabel_css(9))
             self.edits_rows.addWidget(empty)
         current = getattr(self.win, '_current_edit_name', None)
         import time as _t
@@ -547,10 +645,10 @@ class StoryBoard(QWidget):
             b.setToolTip(self.win.txt("tt_edits_row"))
             on = e["name"] == current
             b.setStyleSheet(f"""
-                QPushButton {{ background: {'#1d2a22' if on else 'transparent'}; color: {'#ffffff' if on else '#c8c8c8'};
-                    border: 1px solid {'#2f6b45' if on else 'transparent'}; border-radius: {config.S(4)}px;
-                    text-align: left; padding: {config.S(3)}px {config.S(6)}px; font-size: {config.FS(8.5)}pt; }}
-                QPushButton:hover {{ background: #262626; color: #ffffff; }}""")
+                QPushButton {{ background: {'rgba(35, 165, 89, 36)' if on else 'transparent'}; color: {'#ffffff' if on else '#d4d4d4'};
+                    border: 1px solid {'#2f6b45' if on else 'transparent'}; border-radius: {config.S(8)}px;
+                    text-align: left; padding: {config.S(5)}px {config.S(8)}px; font-size: {config.FS(9)}pt; }}
+                QPushButton:hover {{ background: #2a2a2a; color: #ffffff; }}""")
             b.clicked.connect(lambda _=False, e=e: self.win._load_edit(e))
             b.setContextMenuPolicy(Qt.CustomContextMenu)
             b.customContextMenuRequested.connect(lambda pos, e=e, b=b: self._edit_menu(e, b.mapToGlobal(pos)))
@@ -576,11 +674,15 @@ class StoryBoard(QWidget):
                 sentences = pending["sentences"]
                 n = len(sentences)
                 ok = lambda b: 0 <= b[0] <= b[1] < n
+                self._undo_restoring = True
                 self.load(sentences, [tuple(b) for b in pending.get("edit", []) if ok(b)],
                           [tuple(b) for b in pending.get("unused", []) if ok(b)])
                 self._sync_story()
             except Exception:
                 pass
+            finally:
+                self._undo_restoring = False
+                self._undo_last = self._undo_snapshot()
             self.refresh_edits()
             return
         self.refresh_edits()
@@ -601,10 +703,16 @@ class StoryBoard(QWidget):
             ok = lambda b: 0 <= b[0] <= b[1] < n
             edit = [tuple(b) for b in data.get("edit", []) if ok(b)]
             unused = [tuple(b) for b in data.get("unused", []) if ok(b)]
+            self.edge_air = dict(data.get("air") or {})
             if edit or unused:
-                self.load(sentences, edit, unused)
+                self._undo_restoring = True  # restoring the saved board isn't a change to undo
+                try:
+                    self.load(sentences, edit, unused)
+                finally:
+                    self._undo_restoring = False
         except Exception:
             pass
+        self._undo_last = self._undo_snapshot()  # the saved board is where undo starts
 
     def _target_s(self):
         return (self.win.engine.load_preferences() or {}).get('story_target_s') or None
@@ -636,12 +744,12 @@ class StoryBoard(QWidget):
         dur = story.get("duration", 0.0) if n else 0.0
         target = self._target_s()
         text = self.win.txt("board_edit").format(blocks=n, duration=_mmss(dur))
-        color = "#b0b0b0"
+        color = "#8a8a8a"
         if target and n:
             text += " / " + _mmss(target)
             color = "#3fb950" if abs(dur - target) <= 0.1 * target else "#d29922"
         self.lbl_edit.setText(text)
-        self.lbl_edit.setStyleSheet(f"color: {color}; font-size: {config.FS(9)}pt; font-weight: bold;")
+        self.lbl_edit.setStyleSheet(self._caption_style(color))
         self.lbl_unused.setText(self.win.txt("board_unused").format(blocks=self.list_unused.count()))
         self.lbl_empty.setVisible(n == 0)
         self.btn_clear.setEnabled(n > 0)
@@ -653,8 +761,7 @@ class StoryBoard(QWidget):
         ap = getattr(self.win, "audio_preview", None)
         if ap is None:
             return
-        if not ap.btn_play_edit.isChecked() and self.list_edit.count():
-            ap.btn_play_edit.setChecked(True)
+        # the story plays everywhere now (no Play story switch): just go to the block and play
         offset = float((self.win.engine.load_preferences() or {}).get("offset", 0.133))
         ap.seek_source_time(self.sentences[block[0]]["cut_start"] + offset)
         if ap.player.playbackState() != ap.player.PlaybackState.PlayingState:
@@ -747,9 +854,10 @@ class StoryBoard(QWidget):
             self.list_edit.viewport().update()
             self.list_unused.viewport().update()
             self._refresh_labels()
+            self._notify("lengths")
 
 
 def build_story_panel(win) -> QFrame:
     """Build the Story board activity panel and bind it to the main window."""
     win.story_board = StoryBoard(win)
-    return wrap_activity_panel(win.story_board)
+    return wrap_activity_panel(win.story_board, scroll=True)

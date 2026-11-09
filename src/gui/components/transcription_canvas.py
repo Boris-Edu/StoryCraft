@@ -27,6 +27,103 @@ import config
 # --- INJECTED WIDGET IMPORTS ---
 # -------------------------------
 
+
+def _mmss(seconds):
+    s = int(round(max(0.0, float(seconds or 0.0))))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def build_story_plan(words, clips, sentences=None, blocks=None, lengths=None):
+    """Clean on the story: what the canvas shows, in story order.
+
+    words: the transcript (words_data, recording order). clips: the story's clips in play order
+    (cut_start/cut_end, seconds of the recording). sentences/blocks: the story board's sentences and
+    its blocks ((first, last) sentence index, same order as clips), for the headers and the folds.
+    lengths: seconds each block lasts in the story.
+
+    Returns {'blocks': [{'k', 'ids', 'header': (number, sentence ids, length)}],
+             'folds': [{'key', 'ids', 'slot', 'n', 'sents', 'words'}]}
+    A block's ids: its whole stretch of the recording (cut words included, drawn struck through).
+    A fold: a stretch of the recording not in the story; slot s = shown before block s (len(blocks):
+    after the last one). It sits after the block it follows in the recording, else before the block
+    it precedes. n: sentences in it (None without the board's sentences); a stretch holding no sentence
+    (only words the cut settings take out, around a pause) is a fold too, with n 0 and 'cut' True, so
+    it can be opened here; it has no sentences to add (sents None)."""
+    words = words or []
+    mids = [((float(w.get('start', 0) or 0) + float(w.get('end', 0) or 0)) / 2.0) if w.get('type') != 'silence' else None
+            for w in words]
+    owner = [None] * len(words)
+    use_board = bool(sentences) and blocks is not None and len(blocks) == len(clips)
+    out_blocks = []
+    for k, c in enumerate(clips):
+        try:
+            a, b = float(c["cut_start"]) - 0.05, float(c["cut_end"]) + 0.05
+        except (KeyError, TypeError, ValueError):
+            continue
+        idx = [i for i, m in enumerate(mids) if m is not None and a <= m <= b and owner[i] is None]
+        for i in idx:
+            owner[i] = k
+        sid = ""
+        if use_board:
+            f, l = blocks[k]
+            if 0 <= f < len(sentences) and 0 <= l < len(sentences):
+                sid = sentences[f].get("id", "") if f == l else f"{sentences[f].get('id', '')}–{sentences[l].get('id', '')}"
+        if lengths is not None and k < len(lengths) and lengths[k] is not None:
+            secs = lengths[k]
+        else:
+            secs = max(0.0, float(c["cut_end"]) - float(c["cut_start"]))
+        out_blocks.append({'k': k, 'ids': idx, 'header': (str(k + 1), sid, _mmss(secs))})
+
+    used = {i for f, l in blocks for i in range(f, l + 1)} if use_board else set()
+    s_mid = []
+    if use_board:
+        for j, s in enumerate(sentences):
+            if j in used:
+                continue
+            try:
+                s_mid.append((j, (float(s.get("src_start", s.get("cut_start", 0))) + float(s.get("src_end", s.get("cut_end", 0)))) / 2.0))
+            except (TypeError, ValueError):
+                pass
+    runs, cur = [], None
+    for i, m in enumerate(mids):
+        if m is None:
+            continue
+        if owner[i] is None:
+            cur = [i, i] if cur is None else [cur[0], i]
+        elif cur is not None:
+            runs.append(cur)
+            cur = None
+    if cur is not None:
+        runs.append(cur)
+    folds = []
+    nb = len(out_blocks)
+    pos = {b['k']: p for p, b in enumerate(out_blocks)}
+    for r0, r1 in runs:
+        t0 = float(words[r0].get('start', 0) or 0) - 0.05
+        t1 = float(words[r1].get('end', 0) or 0) + 0.05
+        n_words = sum(1 for i in range(r0, r1 + 1) if mids[i] is not None)
+        if use_board:
+            sidx = [j for j, m in s_mid if t0 <= m <= t1]
+            if sidx:
+                n, sents = len(sidx), (min(sidx), max(sidx))
+            else:                 # only words the cut settings take out: shown, nothing to add
+                n, sents = 0, None
+        else:
+            n, sents = None, None
+        prev = next((owner[i] for i in range(r0 - 1, -1, -1) if mids[i] is not None), None)
+        nxt = next((owner[i] for i in range(r1 + 1, len(words)) if mids[i] is not None), None)
+        if prev is not None and prev in pos:
+            slot = pos[prev] + 1
+        elif nxt is not None and nxt in pos:
+            slot = pos[nxt]
+        else:
+            slot = nb
+        folds.append({'key': (r0, r1), 'ids': list(range(r0, r1 + 1)), 'slot': slot, 'n': n,
+                      'sents': sents, 'words': n_words, 'cut': n == 0})
+    folds.sort(key=lambda f: (f['slot'], f['key']))
+    return {'blocks': out_blocks, 'folds': folds}
+
+
 class TranscriptionCanvas(QWidget):
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
@@ -50,6 +147,17 @@ class TranscriptionCanvas(QWidget):
         self.edit_view = False
         self._edit_order = None
         self._edit_blocks = set()
+        # Clean on the story (build_story_plan): blocks in story order with a header each, and what's
+        # not in the story folded between them. Rows laid out around the words: (rect, kind, data, add rect)
+        self._story_plan = None
+        self._unfolded = set()       # keys of the folds the user opened
+        self._open_words = set()     # their words: a fold holding any of them stays open when the story changes
+        self._open_sig = None        # the transcript those word indices belong to
+        self._dim_ids = set()        # words of the open folds (shown dimmed)
+        self._story_pre = {}         # word id -> {'hdr': header, 'k': block, 'folds': [...]} placed before it
+        self._trail_folds = []
+        self._story_rows = []
+        self._display_order = None   # word indices in the order they're shown (selection runs along it)
         self._sel_anchor = None
         self._is_erasing = False
         self._is_selecting = False
@@ -340,6 +448,9 @@ class TranscriptionCanvas(QWidget):
         self.update()
 
     def load_data(self, words_data):
+        lg = getattr(self.main_window, 'ai_voice_legend', None)
+        if lg is not None:
+            lg.setVisible(any(w.get('voice_patch') for w in (words_data or [])))
         if hasattr(self, '_stream_timer') and self._stream_timer.isActive():
             self._stream_timer.stop()
         self._stream_token_queue = []
@@ -376,13 +487,74 @@ class TranscriptionCanvas(QWidget):
         each story block. Re-laid out at once when the Edited view is on."""
         order = list(order) if order is not None else None
         blocks = set(block_starts or ())
-        if order == self._edit_order and blocks == self._edit_blocks:
+        if order == self._edit_order and blocks == self._edit_blocks and self._story_plan is None:
             return
+        self._story_plan = None
         self._edit_order, self._edit_blocks = order, blocks
         self._edit_set = set(order) if order is not None else None
         if self.edit_view:
             self._selection = None
             self.refresh_layout()
+
+    def set_story_plan(self, plan):
+        """Clean on the story: the plan from build_story_plan (None: no story). Shown while the story
+        view is on (set_edit_view(True)); the words and their marks are never touched."""
+        if plan == self._story_plan:
+            return
+        self._story_plan = plan
+        if plan is not None:
+            order = [i for b in plan['blocks'] for i in b['ids']]
+            self._edit_order = order
+            self._edit_blocks = {b['ids'][0] for b in plan['blocks'][1:] if b['ids']}
+            self._edit_set = set(order)
+            # The story changed: a fold the user opened stays open while it still exists, keyed by its
+            # words, not its place (its stretch may have grown or shrunk, or been split, by the change)
+            words = self.words_data or []
+            sig = (len(words), words[0].get('id') if words else None, words[-1].get('id') if words else None)
+            if sig != self._open_sig:
+                self._open_sig, self._open_words = sig, set()
+            keep = set(self._unfolded)
+            self._unfolded = {f['key'] for f in plan['folds']
+                              if f['key'] in keep or self._open_words.intersection(f['ids'])}
+            self._open_words = {i for f in plan['folds'] if f['key'] in self._unfolded for i in f['ids']}
+        else:
+            self._edit_order, self._edit_blocks, self._edit_set = None, set(), None
+            self._unfolded = set()     # the open folds' words (_open_words) are kept for the story's return
+        if self.edit_view:
+            self._selection = None
+            self.refresh_layout()
+
+    def story_view_on(self):
+        """True while Clean shows the story (blocks in story order, the rest folded)."""
+        return bool(self.edit_view and self._story_plan is not None)
+
+    def toggle_fold(self, key):
+        """Open or close a fold (a stretch of the recording not in the story)."""
+        ids = next((f['ids'] for f in (self._story_plan or {}).get('folds', ()) if f['key'] == key), ())
+        if key in self._unfolded:
+            self._unfolded.discard(key)
+            self._open_words.difference_update(ids)
+        else:
+            self._unfolded.add(key)
+            self._open_words.update(ids)
+        self._selection = None
+        self.refresh_layout()
+
+    def reveal(self, ids):
+        """Open the folds holding these words. True when every one of them is shown now."""
+        if not self.story_view_on():
+            return True
+        want = set(ids or ())
+        opened = False
+        for f in self._story_plan['folds']:
+            if f['key'] not in self._unfolded and want.intersection(f['ids']):
+                self._unfolded.add(f['key'])
+                self._open_words.update(f['ids'])
+                opened = True
+        if opened:
+            self.refresh_layout()
+        shown = self.edit_ids() or set()
+        return want <= shown
 
     def set_edit_view(self, on):
         on = bool(on)
@@ -393,10 +565,14 @@ class TranscriptionCanvas(QWidget):
         self.refresh_layout()
 
     def edit_ids(self):
-        """Word indices shown in the Edited view (None when the original is shown)."""
+        """Word indices shown in the Edited / story view (None when the whole recording is shown)."""
         if not self.edit_view or self._edit_order is None:
             return None
-        return getattr(self, '_edit_set', None)
+        base = getattr(self, '_edit_set', None)
+        if self._story_plan is not None and self._unfolded and base is not None:
+            extra = {i for f in self._story_plan['folds'] if f['key'] in self._unfolded for i in f['ids']}
+            return base | extra
+        return base
 
     def _selected_ids(self):
         """The selected words: between the two ends in display order (the Edited view can reorder)."""
@@ -404,6 +580,13 @@ class TranscriptionCanvas(QWidget):
         if not sel:
             return []
         a, b = sel
+        if self.edit_view and self._display_order:
+            pos = {}
+            for k, i in enumerate(self._display_order):
+                pos.setdefault(i, k)
+            if a in pos and b in pos:
+                lo, hi = sorted((pos[a], pos[b]))
+                return self._display_order[lo:hi + 1]
         if self.edit_view and self._edit_order is not None:
             pos = {i: k for k, i in enumerate(self._edit_order)}
             if a in pos and b in pos:
@@ -424,17 +607,25 @@ class TranscriptionCanvas(QWidget):
         only the first (...) of a run is shown; data remains intact in memory.
         Result is cached in self._cached_visible_words — do NOT call this inside paintEvent.
         """
+        self._story_pre, self._trail_folds, self._dim_ids, self._display_order = {}, [], set(), None
         if not self.words_data: return []
         for w in self.words_data:
             w.pop('_edit_block_start', None)
+        if self.edit_view and self._story_plan is not None:
+            return self._story_visible_words()
         if self.edit_view and self._edit_order is not None:
             vis = []
             n = len(self.words_data)
+            carry = False   # a block starting on a hidden word starts on the next shown one
             for i in self._edit_order:
                 if 0 <= i < n and self.words_data[i].get('type') != 'silence':
                     w = self.words_data[i]
-                    if i in self._edit_blocks and vis:
+                    if w.get('voice_patch_blank'):          # a rewrite with fewer words: slot not shown
+                        carry = carry or (i in self._edit_blocks and bool(vis))
+                        continue
+                    if (i in self._edit_blocks or carry) and vis:
                         w['_edit_block_start'] = True
+                    carry = False
                     vis.append(w)
             return vis
 
@@ -444,6 +635,8 @@ class TranscriptionCanvas(QWidget):
 
         for w in self.words_data:
             if w.get('type') == 'silence':
+                continue
+            if w.get('voice_patch_blank'):      # a rewrite with fewer words: slot not shown
                 continue
                 
             if w.get('is_hidden_start') and not getattr(self.main_window, 'show_hidden_start', False):
@@ -475,6 +668,102 @@ class TranscriptionCanvas(QWidget):
             else:
                 vis.append(w)
         return vis
+
+    def _story_visible_words(self):
+        """The story view: each block's words in story order (a header before each), the folds
+        between them (an open fold's words follow its row, dimmed). Fills _story_pre (rows placed
+        before a word), _trail_folds (rows after the last word), _dim_ids and _display_order."""
+        plan = self._story_plan
+        words = self.words_data
+        n = len(words)
+        vis, order = [], []
+        pending = []
+        by_slot = {}
+        for f in plan['folds']:
+            by_slot.setdefault(f['slot'], []).append(f)
+
+        def emit(ids, pre, dim):
+            first = None
+            for i in ids:
+                if not 0 <= i < n:
+                    continue
+                order.append(i)
+                w = words[i]
+                if w.get('type') == 'silence' or w.get('voice_patch_blank'):
+                    continue
+                if first is None:
+                    first = i
+                    if pre:
+                        self._story_pre[w.get('id', i)] = pre
+                if dim:
+                    self._dim_ids.add(i)
+                vis.append(w)
+            return first is not None
+
+        blocks = plan['blocks']
+        for s in range(len(blocks) + 1):
+            for f in by_slot.get(s, ()):
+                pending.append(f)
+                if f['key'] in self._unfolded and emit(f['ids'], {'folds': list(pending)}, True):
+                    pending = []
+            if s < len(blocks):
+                b = blocks[s]
+                if emit(b['ids'], {'folds': list(pending), 'hdr': b['header'], 'k': s}, False):
+                    pending = []
+        self._trail_folds = pending
+        self._display_order = order
+        return vis
+
+    def _fold_label(self, f):
+        t = getattr(self.main_window, 'txt', None) or (lambda k, d=None: d)
+        n = f.get('n')
+        if f.get('cut'):
+            text = (t("clean_fold_cut_one", "1 word removed by the cut settings") if f.get('words', 0) == 1
+                    else t("clean_fold_cut_n", "{n} words removed by the cut settings").format(n=f.get('words', 0)))
+        elif n is None:
+            text = t("clean_fold_words", "{n} words not in the story").format(n=f.get('words', 0))
+        elif n == 1:
+            text = t("clean_fold_one", "1 sentence not in the story")
+        else:
+            text = t("clean_fold_n", "{n} sentences not in the story").format(n=n)
+        return ("▾  " if f['key'] in self._unfolded else "▸  ") + text
+
+    def _story_small_font(self, active_font):
+        from PySide6.QtGui import QFont
+        f = QFont(active_font)
+        f.setPointSizeF(max(7.0, active_font.pointSizeF() * 0.78))
+        return f
+
+    def _place_story_rows(self, pre, left, right, y, top, metrics, gap_fold, gap_hdr, folds_only=False):
+        """Lays out the fold rows (and the block header) of `pre` from y down; returns the new y."""
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QFontMetrics
+        small = self._story_small_font(self._cached_editor_font or self.font())
+        fm = QFontMetrics(small)
+        rh = fm.height() + config.S(10)
+        add_label = "+  " + (getattr(self.main_window, 'txt', None) or (lambda k, d=None: d))(
+            "clean_fold_add", "Add to the story")
+        add_w = fm.horizontalAdvance(add_label) + config.S(16)
+        for f in pre.get('folds') or ():
+            if y > top:
+                y += gap_fold
+            rect = QRect(left, y, right - left, rh)
+            add = QRect(rect.right() - add_w, y, add_w, rh) if f.get('sents') else None
+            self._story_rows.append((rect, 'fold', f, add))
+            y += rh
+        if not folds_only and pre.get('hdr') is not None:
+            if y > top:
+                y += gap_hdr
+            self._story_rows.append((QRect(left, y, right - left, fm.height() + config.S(4)), 'header', pre['hdr'], None))
+            y += fm.height() + config.S(8)
+        return y
+
+    def story_row_at(self, pos):
+        """(kind, data, on_add) of the fold / header row under pos, else None."""
+        for rect, kind, data, add in getattr(self, '_story_rows', None) or ():
+            if rect.adjusted(0, -2, 0, 2).contains(pos):
+                return kind, data, bool(add is not None and add.contains(pos))
+        return None
 
     def _get_clip_rect(self):
         """Returns the QRect of the currently visible viewport area in canvas coordinates,
@@ -509,6 +798,11 @@ class TranscriptionCanvas(QWidget):
     DOC_GUTTER_GAP = 16      # gap between the timestamp gutter and the column
     DOC_PARA_GAP = 20        # extra space between paragraphs
     DOC_EXTRA_LINE_H = 2     # added to the editor line height for reading comfort
+    DOC_CARD_PAD_Y = 12      # each paragraph (a story block in the edit view) sits on a soft card
+    DOC_CARD_PAD_X = 16
+    DOC_CARD_GAP = 10        # extra room between cards
+    DOC_MOMENT_PAUSE = 1.2   # seconds of pause that start a new card ("moment"); shorter: a new line in it
+    DOC_LINE_GAP = 6         # space between segments inside one card
 
     @staticmethod
     def _format_doc_ts(secs, precise):
@@ -614,6 +908,9 @@ class TranscriptionCanvas(QWidget):
         self.update()
 
     def _calculate_layout(self):
+        self._para_cards = []
+        self._cut_chips = []
+        self._story_rows = []
         self._doc_style = False
         self._ts_in_gutter = False
         if not hasattr(self, 'words_data') or not self.words_data:
@@ -849,6 +1146,9 @@ class TranscriptionCanvas(QWidget):
             for ed in self.sbs_editors:
                 ed.hide()
         
+        if self.edit_view:
+            for w in self.words_data:   # words this view doesn't show keep no place (playhead, search)
+                w.pop('_rect', None)
         # Rebuild the cached list once — paintEvent reads it directly, never recomputes
         visible_words = self._get_visible_words()
         self._cached_visible_words = visible_words
@@ -858,11 +1158,20 @@ class TranscriptionCanvas(QWidget):
             self._layout_document(visible_words, prefs, metrics, ts_metrics, space_w, line_height)
             return
 
+        story_pre = self._story_pre if self.story_view_on() else {}
         for w in visible_words:
             # Clean previous iteration markers
             w.pop('_ts_rect', None)
             w.pop('_ts_text', None)
             w.pop('_separator_y', None)
+
+            # Story view: the folds before this word, and its block's header
+            pre = story_pre.get(w.get('id'))
+            if pre:
+                if (x < max_w) if is_rtl else (x > 20):
+                    y += line_height
+                y = self._place_story_rows(pre, 20, max_w, y, 20, metrics, config.S(6), config.S(18))
+                x = max_w if is_rtl else 20
 
             # A new story block (Edited view): a new paragraph
             if w.get('_edit_block_start') and not w.get('_spk_tag'):
@@ -947,6 +1256,11 @@ class TranscriptionCanvas(QWidget):
                 w['_rect'] = QRect(x, y, word_w, metrics.height() + 4)
                 x += word_w + space_w
 
+        if story_pre is not None and self._trail_folds and self.story_view_on():
+            if (x < max_w) if is_rtl else (x > 20):
+                y += line_height
+            y = self._place_story_rows({'folds': self._trail_folds}, 20, max_w, y, 20, metrics,
+                                       config.S(6), 0, folds_only=True)
         self.setMinimumHeight(y + line_height + 40)
 
     def _layout_document(self, visible_words, prefs, metrics, ts_metrics, space_w, line_height):
@@ -966,31 +1280,103 @@ class TranscriptionCanvas(QWidget):
         ts_h = ts_metrics.height()
         ts_dy = (word_h - metrics.height()) // 2 + metrics.ascent() - ts_metrics.ascent()
 
-        x, y = left, 20
+        # Paragraph cards: (rect, is_story_block), painted under the words by paintEvent
+        pad_y, pad_x = config.S(self.DOC_CARD_PAD_Y), config.S(self.DOC_CARD_PAD_X)
+        card_left = (gutter_x if in_gutter and not self.edit_view else left) - pad_x
+        card_right = right + pad_x
+        cards, card = [], None
+        after_tag = False
+        prev_end = None
+        story_on = self.story_view_on()
+        story_pre = self._story_pre if story_on else {}
+        chip_gaps = []   # story view: (top, bottom, n) of the gap before block n's card
+
+        def _close_card():
+            if card is not None and card['bottom'] is not None:
+                cards.append((QRect(card_left, card['top'], card_right - card_left, card['bottom'] - card['top']),
+                              card.get('story', self.edit_view)))
+
+        def _open_card(top):
+            return {'top': top - pad_y, 'bottom': None}
+
+        x, y = left, 20 + pad_y
         for w in visible_words:
             w.pop('_ts_rect', None)
             w.pop('_ts_text', None)
             w.pop('_separator_y', None)
 
+            # Story view: fold rows between the cards, then the block's card opens with its header
+            pre = story_pre.get(w.get('id'))
+            if pre:
+                if x > left:
+                    y += lh
+                if card is not None:
+                    _close_card()
+                    if card['bottom'] is not None:
+                        y = card['bottom']
+                    card = None
+                y = self._place_story_rows(pre, card_left, card_right, y, 20 + pad_y, metrics,
+                                           config.S(8), 0, folds_only=True)
+                if pre.get('hdr') is not None:
+                    gap_top = y
+                    if y > 20 + pad_y or pre.get('folds'):
+                        y += para_gap + config.S(self.DOC_CARD_GAP)
+                    if pre.get('k', 0) >= 1:
+                        chip_gaps.append((gap_top, y, pre['k']))
+                    card = _open_card(y + pad_y)
+                    card['story'] = True
+                    y = self._place_story_rows({'hdr': pre['hdr']}, left, right, y + pad_y, 0, metrics, 0, 0)
+                    card['bottom'] = y + pad_y
+                else:   # an open fold: its words on a plain card
+                    y += config.S(6)
+                    card = _open_card(y + pad_y)
+                    card['story'] = False
+                    y += pad_y
+                x = left
+                if w.get('_spk_tag'):   # the speaker's tag inside the card, under the header
+                    y += self._place_speaker_tag(w, left, y, ts_metrics)
+                    after_tag = True
+
             if w.get('_edit_block_start') and not w.get('_spk_tag'):  # a new story block
                 if x > left:
                     y += lh
-                y += para_gap
+                y += para_gap + (config.S(self.DOC_CARD_GAP) + 2 * pad_y if card is not None else 0)
                 x = left
+                _close_card()
+                card = _open_card(y)
 
-            if w.get('_spk_tag'):  # a new speaker turn: its name tag above the paragraph
+            if w.get('_spk_tag') and not pre:  # a new speaker turn: its name tag above the paragraph
                 if x > left:
                     y += lh
-                if y > 20:
+                if card is not None:
+                    _close_card()
+                    card = None
+                    y += pad_y + config.S(self.DOC_CARD_GAP)
+                if y > 20 + pad_y:
                     y += para_gap
                 x = left
-                y += self._place_speaker_tag(w, left, y, ts_metrics)
+                y += self._place_speaker_tag(w, left, y, ts_metrics) + pad_y
+                after_tag = True
+                if self.edit_view:
+                    card = _open_card(y)
+                    if story_on and w.get('id') in self._dim_ids:
+                        card['story'] = False
 
             if w.get('is_segment_start') and not self.edit_view:
                 if x > left:
                     y += lh
-                if y > 20 and not w.get('_spk_tag'):
-                    y += para_gap
+                start = float(w.get('start', 0) or 0)
+                pause = (start - prev_end) if prev_end is not None else None
+                if card is not None and pause is not None and pause < self.DOC_MOMENT_PAUSE:
+                    y += config.S(self.DOC_LINE_GAP)  # same thought: a new line on the same card
+                else:
+                    if card is not None:  # the previous moment's card ends here
+                        _close_card()
+                        y += 2 * pad_y + config.S(self.DOC_CARD_GAP)
+                    if y > 20 + pad_y and not w.get('_spk_tag') and not after_tag:
+                        y += para_gap
+                    card = _open_card(y)
+                after_tag = False
                 x = left
                 ts_text = self._format_doc_ts(w.get('start', 0), precise)
                 w['_ts_text'] = ts_text
@@ -1016,8 +1402,53 @@ class TranscriptionCanvas(QWidget):
                 y += lh
             w['_rect'] = QRect(x, y, word_w, word_h)
             x += word_w + space_w
+            try:
+                prev_end = float(w.get('end', prev_end) or prev_end or 0)
+            except (TypeError, ValueError):
+                pass
+            if card is None:
+                card = _open_card(y)
+            card['bottom'] = y + word_h + pad_y
 
-        self.setMinimumHeight(y + lh + 40)
+        _close_card()
+        if story_on and self._trail_folds:
+            if card is not None and card['bottom'] is not None:
+                y = card['bottom']
+            elif x > left:
+                y += lh
+            y = self._place_story_rows({'folds': self._trail_folds}, card_left, card_right, y, 20 + pad_y,
+                                       metrics, config.S(8), 0, folds_only=True)
+        self._para_cards = cards
+        # The cuts of the story (edit view): a clickable "Cut n" chip in the gap between two blocks,
+        # on the right so it never meets a speaker tag; opens that cut in Review
+        chips = []
+        if story_on:
+            for top, bottom, n in chip_gaps:
+                label = "✂  " + self.main_window.txt("sw_cut", "cut {n}").format(n=n)
+                cw = metrics.horizontalAdvance(label) + config.S(18)
+                ch = min(config.S(22), max(config.S(14), bottom - top - 2))
+                cy = top + max(1, (bottom - top - ch) // 2)
+                chips.append((QRect(int(card_left + (card_right - card_left - cw) / 2), cy, cw, ch), n, label))
+        elif self.edit_view:
+            fm = metrics
+            n = 0   # block 1 isn't marked, so the first marked word starts cut 1
+            for j, w in enumerate(visible_words):
+                if not w.get('_edit_block_start'):
+                    continue
+                n += 1
+                if j > 0 and '_rect' in visible_words[j - 1] and '_rect' in w:
+                    prev_bottom = visible_words[j - 1]['_rect'].bottom() + pad_y
+                    next_top = w['_rect'].top() - pad_y
+                    if w.get('_spk_rect') is not None:
+                        next_top = min(next_top, w['_spk_rect'].top())
+                    label = "\u2702  " + self.main_window.txt("sw_cut", "cut {n}").format(n=n)   # as on the Story page
+                    cw = fm.horizontalAdvance(label) + config.S(18)
+                    ch = min(config.S(22), max(config.S(14), next_top - prev_bottom - 2))
+                    cy = prev_bottom + max(1, (next_top - prev_bottom - ch) // 2)
+                    # centred between the two blocks, like the Story page's chips (same spot, same label)
+                    chips.append((QRect(int(card_left + (card_right - card_left - cw) / 2), cy, cw, ch), n, label))
+        self._cut_chips = chips
+        self.setMinimumHeight(y + lh + 40 + pad_y)
 
 
 
@@ -1040,6 +1471,11 @@ class TranscriptionCanvas(QWidget):
         }
         
         cut_preview = self._cut_preview
+        # Compose > Original with a story: what's left out of it is greyed, its lines get a bar in the margin
+        story_ids = getattr(self, '_story_ids', None) or set()
+        story_dim = getattr(self, '_story_ids', None) is not None and not self.edit_view
+        # Story view: the words of an open fold (not in the story) are dimmed
+        fold_dim = self._dim_ids if self.story_view_on() else ()
         # Document view: soft marks (a light fill + underline), so marked words keep the body text colour
         doc_style = getattr(self, '_doc_style', False)
         doc_mark_fg = qc(config.WORD_NORMAL_FG)
@@ -1093,6 +1529,36 @@ class TranscriptionCanvas(QWidget):
 
         # Fill background of dirty rect (prevents tearing with WA_OpaquePaintEvent)
         p.fillRect(dirty, qc(config.BG_COLOR))
+        # Paragraph cards (document view): a soft surface per paragraph, story blocks edged in violet
+        cards = getattr(self, '_para_cards', None) if doc_style else None
+        if cards:
+            radius = config.S(12)
+            card_bg, card_line, block_line = qc("#242424"), qc("#2e2e2e"), QColor(168, 85, 247, 90)
+            for rect, is_block in cards:
+                if not rect.intersects(dirty):
+                    continue
+                p.setBrush(card_bg)
+                p.setPen(QPen(block_line if is_block else card_line, 1))
+                p.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+            p.setBrush(Qt.NoBrush)
+        chips = getattr(self, '_cut_chips', None) if doc_style else None
+        if chips:
+            small = QFont(active_font)
+            small.setPointSizeF(max(6.0, active_font.pointSizeF() * 0.72))
+            p.setFont(small)
+            for rect, n, label in chips:
+                if not rect.intersects(dirty):
+                    continue
+                p.setBrush(qc("#2a2a2a"))
+                p.setPen(QPen(QColor(168, 85, 247, 150), 1))
+                p.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), rect.height() / 2, rect.height() / 2)
+                p.setPen(qc("#d4d4d4"))
+                p.drawText(rect, Qt.AlignCenter, label)
+            p.setFont(active_font)
+            p.setBrush(Qt.NoBrush)
+        rows = getattr(self, '_story_rows', None) if self.story_view_on() else None
+        if rows:
+            self._paint_story_rows(p, rows, dirty, active_font)
         # ────────────────────────────────────────────────────────────────────────
 
         # Oś Y separatorów (drawn unconditionally whenever sep_y is within visible clip range)
@@ -1237,6 +1703,59 @@ class TranscriptionCanvas(QWidget):
                     lines[key] = lines[key].united(r) if key in lines else QRectF(r)
             for r in lines.values():
                 p.drawRoundedRect(r.adjusted(-5, -3, 5, 3), 4, 4)
+
+        if story_dim and story_ids:
+            bar = QColor(qc(config.BTN_BG))
+            bar.setAlpha(170)
+            p.setPen(Qt.NoPen)
+            p.setBrush(bar)
+            line_spans = {}
+            for w in visible_words:
+                if '_rect' in w and w.get('id') in story_ids:
+                    r = w['_rect']
+                    key = round(r.top())
+                    lo, hi = line_spans.get(key, (r.top(), r.bottom()))
+                    line_spans[key] = (min(lo, r.top()), max(hi, r.bottom()))
+            line_left = min((w['_rect'].left() for w in visible_words if '_rect' in w), default=0)
+            for top, bottom in line_spans.values():
+                p.drawRoundedRect(QRectF(line_left - config.S(13), top + 1, config.S(3), bottom - top - 2), 1.5, 1.5)
+
+        # A passage being transcribed again: a pulsing band and what is happening, right where the user looks
+        busy = getattr(self, '_busy_ids', None)
+        if busy:
+            import math, time as _time
+            from PySide6.QtGui import QFontMetrics
+            band = QColor(qc(config.BTN_BG))
+            band.setAlpha(int(40 + 35 * (0.5 + 0.5 * math.sin(_time.time() * 4.0))))
+            p.setPen(Qt.NoPen)
+            p.setBrush(band)
+            lines = {}
+            for w in visible_words:
+                if '_rect' in w and w.get('id') in busy:
+                    r = w['_rect']
+                    key = round(r.top())
+                    lines[key] = lines[key].united(r) if key in lines else QRectF(r)
+            for r in lines.values():
+                p.drawRoundedRect(r.adjusted(-5, -3, 5, 3), 4, 4)
+            text = getattr(self, '_busy_text', '') or ''
+            if lines and text:
+                top = min(lines.values(), key=lambda r: r.top())
+                f = QFont(self.font())
+                f.setPointSizeF(max(8.0, f.pointSizeF() * 0.8))
+                f.setBold(True)
+                p.setFont(f)
+                fm = QFontMetrics(f)
+                pw, ph = fm.horizontalAdvance(text) + config.S(16), fm.height() + config.S(6)
+                pill = QRectF(top.left() - 5, top.top() - ph - config.S(5), pw, ph)
+                if pill.top() < 0:
+                    pill.moveTop(top.bottom() + config.S(5))
+                from PySide6.QtGui import QPen
+                p.setPen(QPen(QColor(qc(config.BG_COLOR)), 2))   # a clean edge over the text it sits on
+                p.setBrush(QColor(qc(config.BTN_BG)))
+                p.drawRoundedRect(pill, ph / 2, ph / 2)
+                p.setPen(QColor(qc(config.BTN_FG)))
+                p.drawText(pill, Qt.AlignCenter, text)
+                p.setFont(self.font())
 
         # Line being played: a soft accent band across the text column
         playing = next((w for w in visible_words if w.get('_audio_active') and '_rect' in w), None)
@@ -1411,10 +1930,25 @@ class TranscriptionCanvas(QWidget):
             elif is_cut and not w.get('_audio_active'):
                 final_fg = qc("#8a8a8a")
                 
+            if ((story_dim and w.get('id') not in story_ids or w.get('id') in fold_dim)
+                    and not w.get('_audio_active') and w.get('type') != 'silence'):
+                dimmed = QColor(final_fg)
+                dimmed.setAlphaF(dimmed.alphaF() * 0.38)   # left out of the story
+                final_fg = dimmed
+            ai_voice = bool(w.get('voice_patch')) and not w.get('_audio_active')
+            if ai_voice:
+                final_fg = QColor(qc(config.AI_VOICE_FG)) if hasattr(config, 'AI_VOICE_FG') else QColor(qc("#67e8f9"))
             p.setPen(final_fg)
             draw_rect = w['_rect'].adjusted(-20, 0, 20, 0) if w.get('_audio_active') else w['_rect']
             p.drawText(draw_rect, Qt.AlignCenter, w.get('_display_text', w.get('text', '')))
             
+            if ai_voice:   # synthetic speech: a dotted underline as well as the colour
+                upen = QPen(final_fg, 1.4)
+                upen.setStyle(Qt.DotLine)
+                p.setPen(upen)
+                uy = int(w['_rect'].bottom()) - 1
+                p.drawLine(int(w['_rect'].left()) + 2, uy, int(w['_rect'].right()) - 2, uy)
+                p.setPen(final_fg)
             if is_cut:
                 p.setPen(QPen(final_fg, 1.5))
                 mid_y = int(w['_rect'].center().y()) + 1
@@ -1435,6 +1969,50 @@ class TranscriptionCanvas(QWidget):
             p.setBrush(qc("#ffffff"))
             for rect in active_underlines:
                 p.drawRoundedRect(rect, 1, 1)
+
+    def _paint_story_rows(self, p, rows, dirty, active_font):
+        """Story view: each block's slim header (number · sentence ids · length, as on the Story page)
+        and the quiet fold rows ("▸ 3 sentences not in the story", + Add to the story)."""
+        from PySide6.QtGui import QColor, QFontMetrics, QPen
+        small = self._story_small_font(active_font)
+        bold = self._story_small_font(active_font)
+        bold.setBold(True)
+        fm, fmb = QFontMetrics(small), QFontMetrics(bold)
+        muted, line_c = qc("#8a8a8a"), qc("#2e2e2e")
+        violet = QColor(192, 132, 252)
+        t = getattr(self.main_window, 'txt', None) or (lambda k, d=None: d)
+        p.save()
+        for rect, kind, data, add in rows:
+            if not rect.intersects(dirty):
+                continue
+            cy = rect.top() + (rect.height() - fm.height()) // 2
+            if kind == 'header':
+                num, sid, length = data
+                x = rect.left()
+                p.setFont(bold)
+                p.setPen(violet)
+                p.drawText(x, cy + fmb.ascent(), num)
+                x += fmb.horizontalAdvance(num)
+                rest = "  ·  ".join(s for s in (sid, length) if s)
+                p.setFont(small)
+                p.setPen(muted)
+                p.drawText(x, cy + fm.ascent(), "  ·  " + rest if rest else "")
+                continue
+            label = self._fold_label(data)
+            p.setFont(small)
+            p.setPen(qc("#7a7a7a"))
+            p.drawText(rect.left(), cy + fm.ascent(), label)
+            x0 = rect.left() + fm.horizontalAdvance(label) + config.S(12)
+            x1 = (add.left() if add is not None else rect.right()) - config.S(8)
+            if x1 > x0:
+                p.setPen(QPen(line_c, 1, Qt.DashLine))
+                ly = rect.top() + rect.height() // 2
+                p.drawLine(x0, ly, x1, ly)
+            if add is not None:
+                p.setPen(qc(config.BTN_BG))
+                p.drawText(add, Qt.AlignRight | Qt.AlignVCenter,
+                           "+  " + t("clean_fold_add", "Add to the story"))
+        p.restore()
 
     DOC_MARK_FILL = 0.4      # soft fill opacity, relative to the marker colour's own alpha
 
@@ -1567,9 +2145,28 @@ class TranscriptionCanvas(QWidget):
                 break
 
 
+    def cut_chip_at(self, pos):
+        for rect, n, _label in getattr(self, '_cut_chips', None) or []:
+            if rect.adjusted(-3, -3, 3, 3).contains(pos):
+                return n
+        return None
+
     def mousePressEvent(self, event):
         from PySide6.QtGui import QGuiApplication
+        row = self.story_row_at(event.position().toPoint()) if self.story_view_on() else None
+        if row is not None:
+            kind, data, on_add = row
+            if kind == 'fold' and event.button() == Qt.LeftButton:
+                if on_add:
+                    self._fold_add(data)
+                else:
+                    self.toggle_fold(data['key'])
+            return   # a row is not a word: nothing to mark or clear
         if event.button() == Qt.LeftButton:
+            n = self.cut_chip_at(event.position().toPoint())
+            if n is not None and hasattr(self.main_window, 'open_review_cut'):
+                self.main_window.open_review_cut(n)   # the cut between story blocks n-1 and n
+                return
             first = self.speaker_tag_at(event.position().toPoint())
             if first is not None and hasattr(self.main_window, '_speaker_turn_menu'):
                 self.main_window._speaker_turn_menu(first, event.globalPosition().toPoint())
@@ -1589,8 +2186,12 @@ class TranscriptionCanvas(QWidget):
         global_mods = QGuiApplication.queryKeyboardModifiers()
         active_mods = global_mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier)
         
-        if event.button() == expected_btn:
-            if active_mods == expected_mod:
+        # Option/Alt + right-click always puts the playhead on the word (whatever Settings say for the jump)
+        ev_alt = (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+                                       | Qt.KeyboardModifier.ShiftModifier)) == Qt.KeyboardModifier.AltModifier
+        alt_rmb = event.button() == Qt.RightButton and (active_mods == Qt.KeyboardModifier.AltModifier or ev_alt)
+        if event.button() == expected_btn or alt_rmb:
+            if active_mods == expected_mod or alt_rmb:
                 for w in self._cached_visible_words:
                     if w.get('is_script_word') or w.get('is_script_bg') or w.get('is_script_placeholder'):
                         continue
@@ -1706,6 +2307,19 @@ class TranscriptionCanvas(QWidget):
             return
         if event.buttons() & (Qt.LeftButton | Qt.RightButton) and getattr(self, '_is_painting', False):
             self._handle_mouse(event.pos())
+        elif not event.buttons() and self.story_view_on():
+            row = self.story_row_at(event.position().toPoint())
+            hand = row is not None and row[0] == 'fold'
+            if hand != getattr(self, '_row_hand', False):
+                self._row_hand = hand
+                self.setCursor(Qt.PointingHandCursor if hand else Qt.ArrowCursor)
+
+    def _fold_add(self, fold):
+        """A fold's "Add to the story": its sentences go into the story (the Story page's add)."""
+        sents = fold.get('sents')
+        mw = self.main_window
+        if sents and hasattr(mw, '_clean_fold_add'):
+            mw._clean_fold_add(*sents)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and getattr(self, '_is_selecting', False):
@@ -1763,7 +2377,27 @@ class TranscriptionCanvas(QWidget):
         menu.addSeparator()
         menu.addAction(t("menu_sel_restore"), lambda: mw._selection_restore_ai(ids))
         menu.addAction(t("menu_sel_detect"), lambda: mw._selection_detect_again(ids))
-        menu.addAction(t("menu_sel_retranscribe"), lambda: mw._selection_retranscribe(ids))
+        if (hasattr(mw, '_selection_story')
+                and getattr(getattr(mw, 'story_board', None), 'sentences', None)):
+            in_story = getattr(self, '_story_ids', None) or set()
+            spoken = [i for i in ids if self.words_data[i].get('type') != 'silence']
+            n_in = sum(1 for i in spoken if i in in_story)
+            if n_in < len(spoken):
+                menu.addAction(t("menu_sel_story_add", "Add to the story"), lambda: mw._selection_story(ids, True))
+            if n_in:
+                menu.addAction(t("menu_sel_story_out", "Leave out of the story"), lambda: mw._selection_story(ids, False))
+            menu.addSeparator()
+        if hasattr(mw, '_selection_correct'):
+            menu.addAction(t("menu_sel_correct", "Correct the words…"), lambda: mw._selection_correct(ids))
+        if hasattr(mw, '_selection_voice_patch'):
+            menu.addAction(t("menu_sel_voice_patch", "Send to voice patch"), lambda: mw._selection_voice_patch(ids))
+        if hasattr(mw, '_fill_retranscribe_menu'):
+            re_menu = context_menu(menu)
+            re_menu.setTitle(t("menu_sel_retranscribe"))
+            menu.addMenu(re_menu)
+            mw._fill_retranscribe_menu(re_menu, ids)
+        else:
+            menu.addAction(t("menu_sel_retranscribe"), lambda: mw._selection_retranscribe(ids))
         menu.exec(global_pos)
         self._selection = None
         self.update()

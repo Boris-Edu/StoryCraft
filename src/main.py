@@ -489,6 +489,12 @@ def main():
         # Initialize hardware VSync / high-refresh rate synchronization dynamically
         gui.init_high_refresh_sync(app)
 
+        # Text size preference first (Settings > General): it sets the type and, on macOS, the spacing
+        try:
+            config.set_text_size((os_doc.get_all_prefs() or {}).get('ui_text_size'))
+        except Exception:
+            config.set_text_size(None)
+
         # Initialize UI scaling factor dynamically based on screen geometry
         config.init_ui_scaling(app)
 

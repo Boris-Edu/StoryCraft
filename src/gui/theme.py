@@ -100,6 +100,10 @@ def _map_rgb(r, g, b):
         a = _norm(t["accent"])
         ah, al, as_ = colorsys.rgb_to_hls(*(int(a[i:i + 2], 16) / 255 for i in (1, 3, 5)))
         return colorsys.hls_to_rgb(ah, max(0.12, min(0.85, al * l / _BRAND_L)), as_)
+    if t.get("light") and l < 0.30:
+        # a dark tinted fill (the violet of a selected item, the dark cyan behind AI parts): on a light
+        # theme it becomes a pale tint of the same hue, or its text (turned dark) would sit on dark
+        return colorsys.hls_to_rgb(h, 0.90 - l * 0.25, min(0.70, max(0.35, s)))
     return None
 
 
@@ -190,6 +194,23 @@ _WHITE_TEXT_RE = re.compile(r"(?<![-\w])color\s*:\s*(#fff\b|#ffffff\b|white\b)",
 _TEXT_COLOR_RE = re.compile(r"((?<![-\w])color\s*:\s*)(#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b)")
 
 
+# Grey text keeps at least ~4.5:1 contrast on the theme's panels: secondary labels written in the
+# classic palette as #666-#888 sank to ~2.5:1 on the ink background. Dark text (l <= 0.2, used on
+# bright pills) is left alone.
+_TEXT_MIN_L_DARK = 0.56
+_TEXT_MAX_L_LIGHT = 0.46
+
+
+def _readable_grey_text(mapped_hex, light=False):
+    hx = _norm(mapped_hex)
+    h, l, s = colorsys.rgb_to_hls(*(int(hx[i:i + 2], 16) / 255 for i in (1, 3, 5)))
+    if not light and l < _TEXT_MIN_L_DARK:
+        return _hex(colorsys.hls_to_rgb(h, _TEXT_MIN_L_DARK, s))
+    if light and l > _TEXT_MAX_L_LIGHT:
+        return _hex(colorsys.hls_to_rgb(h, _TEXT_MAX_L_LIGHT, s))
+    return mapped_hex
+
+
 def _text_color(value):
     hx = _norm(value)
     t = THEMES.get(_current)
@@ -197,7 +218,13 @@ def _text_color(value):
         return value
     h, l, s = colorsys.rgb_to_hls(*(int(hx[i:i + 2], 16) / 255 for i in (1, 3, 5)))
     if not _is_accent(h, l, s):
-        return color(value)
+        mapped = color(value)
+        if s < 0.10 and l > 0.2:
+            return _readable_grey_text(mapped, light=bool(t.get("light")))
+        if t.get("light") and s >= 0.10 and l > 0.62:
+            # pale tinted text (made for dark fills): a deep shade of the same hue, readable on light
+            return _hex(colorsys.hls_to_rgb(h, 0.34, min(0.75, max(0.40, s))))
+        return mapped
     a = _norm(t["accent"])
     ah, al, as_ = colorsys.rgb_to_hls(*(int(a[i:i + 2], 16) / 255 for i in (1, 3, 5)))
     return _hex(colorsys.hls_to_rgb(ah, max(al, min(0.85, al * l / _BRAND_L)), as_))

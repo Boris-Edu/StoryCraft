@@ -25,7 +25,7 @@ from gui.widgets.buttons import CustomCheckBox
 
 
 class CustomMsgBox(FramelessWindowMixin, _BaseDialog):
-    def __init__(self, parent, title: str, message: str, btn_yes_text: str, btn_no_text: str = None, btn_cancel_text: str = None, checkbox_text: str = None, checkbox_checked: bool = False):
+    def __init__(self, parent, title: str, message: str, btn_yes_text: str, btn_no_text: str = None, btn_cancel_text: str = None, checkbox_text: str = None, checkbox_checked: bool = False, extra_widget=None):
         super().__init__(parent)
         self.frameless_init(is_popup=True)
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -89,6 +89,9 @@ class CustomMsgBox(FramelessWindowMixin, _BaseDialog):
         lbl_msg.setFixedWidth(config.S(380))
         lbl_msg.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         content_layout.addWidget(lbl_msg)
+        if extra_widget is not None:  # e.g. a text box the message asks to fill in
+            extra_widget.setParent(self.inner_frame)
+            content_layout.addWidget(extra_widget)
         
         self.chk_box = None
         if checkbox_text:
@@ -119,6 +122,11 @@ class CustomMsgBox(FramelessWindowMixin, _BaseDialog):
         btn_layout.addWidget(btn_yes)
         
         content_layout.addLayout(btn_layout)
+        for i in range(btn_layout.count()):   # buttons never shrink below their text: the box grows instead
+            w = btn_layout.itemAt(i).widget()
+            if isinstance(w, QPushButton):
+                w.ensurePolished()
+                w.setMinimumWidth(w.sizeHint().width())
         
         self.adjustSize()
         if parent and hasattr(parent, 'window') and parent.window().isVisible():

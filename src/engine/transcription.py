@@ -391,7 +391,10 @@ try:
     from mlx_whisper.audio import load_audio, SAMPLE_RATE
 
     print("[Chunked] Loading MLX model {repo} on Apple GPU...", flush=True)
-    model_path = snapshot_download({repr(repo)}, cache_dir={repr(self.models_dir)})
+    try:  # already downloaded: no round trip to the Hugging Face servers (it took ~40 s on a slow line)
+        model_path = snapshot_download({repr(repo)}, cache_dir={repr(self.models_dir)}, local_files_only=True)
+    except Exception:
+        model_path = snapshot_download({repr(repo)}, cache_dir={repr(self.models_dir)})
     audio = load_audio({repr(audio_path)})
     total_dur = audio.shape[0] / SAMPLE_RATE
     ISLANDS = {repr(clusters)} or [(0.0, total_dur)]

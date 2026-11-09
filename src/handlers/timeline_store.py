@@ -71,6 +71,8 @@ def save(engine, packet, keep_previous=False):
     key = key_for(packet, proj)
     if key is None:
         return None
+    if packet.get("project_dir") and key[0] != "_files":
+        key = (_safe(packet["project_dir"]), key[1])  # opened from that project's folder: stays there
     path = path_for(engine.os_doc.get_saves_folder(), *key)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if keep_previous:

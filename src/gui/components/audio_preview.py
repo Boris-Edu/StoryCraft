@@ -14,6 +14,15 @@ Integrates:
 - Video Preview Widget (16:9 QVideoWidget for talking-head footage)
 - Timeline Preview Widget (Fairlight green clip ribbon with waveform, hatched cuts, and playhead)
 - Full modularity: toggle video preview, toggle timeline preview, compact audio-only bar, or collapse all.
+
+ONE STORY, ONE TIMELINE, EVERYWHERE: on every page the player plays the story (its blocks in story order,
+the cut parts skipped, voice patches swapped in: exactly what Send to Resolve builds), the ribbon below shows
+the story and the time readout is story time. With no story yet it plays the recording and says so quietly.
+The "Play original" switch (off by default; called Recording in the code) plays the original recording instead (raw: no cuts, no patches),
+under a banner saying so; it turns itself off when the page changes or a timeline opens.
+    recording_mode / set_recording_mode(on) / recording_mode_changed(bool)
+    seek_source_time(t): a moment of the recording -> there in the story (outside it: the nearest story moment)
+    seek_story_time(T), story_time_now(), story_length()
 """
 
 from __future__ import annotations
@@ -37,6 +46,7 @@ from PySide6.QtGui import (
     QPolygonF,
     QPixmap,
     QFont,
+    QFontMetrics,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -59,22 +69,38 @@ from osdoc import log_info, log_error
 
 class PreviewToggleBtn(QPushButton):
     """Clean minimalist toggle icon button for Timeline and Video preview modes."""
-    def __init__(self, mode: str = "timeline", parent: Optional[QWidget] = None):
+    def __init__(self, mode: str = "timeline", parent: Optional[QWidget] = None, label: Optional[str] = None):
         super().__init__(parent)
         self.mode = mode
+        self.label = label   # a word after the icon (the Video toggle), so it reads as a button
         self.setCheckable(True)
         self.setChecked(True)
-        self.setFixedSize(config.S(24), config.S(24))
+        size = config.S(26)
+        if label:
+            f = self.font()
+            f.setPointSizeF(config.FS(9))
+            f.setWeight(QFont.DemiBold)
+            self.setFont(f)
+            self.setFixedSize(size + QFontMetrics(f).horizontalAdvance(label) + config.S(9), size)
+        else:
+            self.setFixedSize(size, size)
         self.setCursor(Qt.PointingHandCursor)
+        # One segment of the view toggle group (the group's frame draws the pill around both)
         self.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
                 border: none;
-                border-radius: {config.S(4)}px;
+                border-radius: {size // 2 - 1}px;
                 padding: 0px;
             }}
             QPushButton:hover {{
-                background-color: rgba(255, 255, 255, 0.08);
+                background-color: #333333;
+            }}
+            QPushButton:checked {{
+                background-color: #303030;
+            }}
+            QPushButton:checked:hover {{
+                background-color: #3a3a3a;
             }}
         """)
 
@@ -82,9 +108,14 @@ class PreviewToggleBtn(QPushButton):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        color = qc("#2ecc71") if self.isChecked() else qc("#707070")
-        w = float(self.width())
+        color = qc("#23a559") if self.isChecked() else qc("#8a8a8a")  # the classic accent: maps to the theme accent exactly
         h = float(self.height())
+        w = h if self.label else float(self.width())   # the icon keeps its square on the left
+        if self.label:
+            painter.setPen(qc("#ffffff") if self.isChecked() else qc("#b8b8b8"))
+            painter.setFont(self.font())
+            painter.drawText(QRectF(w + config.S(1), 0.0, float(self.width()) - w - config.S(1), h),
+                             int(Qt.AlignLeft | Qt.AlignVCenter), self.label)
 
         if self.mode == "timeline":
             # Waveform bars icon
@@ -108,11 +139,38 @@ class PreviewToggleBtn(QPushButton):
             painter.drawPolygon(tri)
 
 
+class _PlayStoryCompat:
+    """Stands in for the removed "Play story" button (code that still asks it): checked = the story plays."""
+    def __init__(self, ap):
+        self._ap = ap
+
+    def isChecked(self):
+        return bool(self._ap.edit_mode)
+
+    def setChecked(self, on):
+        if on:
+            self._ap.set_recording_mode(False)
+
+    def isEnabled(self):
+        return self._ap._has_story()
+
+    def setEnabled(self, _on):
+        pass
+
+    def blockSignals(self, _b):
+        return False
+
+    def isVisible(self):
+        return False
+
+
 class AudioPreviewWidget(QFrame):
     """
     Unified bottom media dock in BadWords v4.0.
     Houses the control bar, video monitor, and waveform preview ribbon.
     """
+    recording_mode_changed = Signal(bool)   # the Recording switch: True = the original recording plays
+
     def __init__(self, parent_widget: Optional[QWidget], main_window: Optional[QWidget]):
         super().__init__(parent_widget)
         self.main_window = main_window
@@ -124,7 +182,12 @@ class AudioPreviewWidget(QFrame):
         if self.main_window and hasattr(self.main_window, "engine"):
             prefs = self.main_window.engine.load_preferences() or {}
         self.show_timeline = bool(prefs.get("show_timeline_preview", True))
-        self.show_video = bool(prefs.get("show_video_preview", True))
+        # The video pane: the user's choice (True/False), or None = automatic (shown when there is a video)
+        pv = prefs.get("preview_show_video")
+        self._video_pref = pv if isinstance(pv, bool) else None
+        self._has_video = False
+        self.show_video = self._video_wanted()
+        self._time_tip = None
 
         if os.name == "posix":
             os.environ["PULSE_PROP_application.name"] = "BadWordsApp"
@@ -134,16 +197,31 @@ class AudioPreviewWidget(QFrame):
             vbar = self.main_window.scroll_area.verticalScrollBar()
             vbar.actionTriggered.connect(self._on_user_scroll)
 
+        # Shared metrics of the transport row: one control height, pills rounded to just under half of it
+        # (a radius beyond half the height makes Qt drop the rounding)
+        ctrl_h = config.S(30)
+        pill_r = ctrl_h // 2 - 1
+        self._ctrl_h = ctrl_h
+        # Slider knobs: round, groove S(3) + S(4) either side. The radius is written with a decimal on
+        # purpose: theme.py rounds small integer radii up, which would square the knob off
+        knob = config.S(3) + 2 * config.S(4)
+        knob_r = f"{(knob - 1) / 2:.1f}"  # Qt drops the rounding at exactly half
+
         self.setObjectName("AudioPreview")
         self.setStyleSheet(f"""
             QFrame#AudioPreview {{
+                background-color: #1a1a1a;
+                border: none;
+                border-top: 1px solid #303030;
+            }}
+            QWidget#AudioContent {{
                 background: transparent;
                 border: none;
             }}
-            QWidget#AudioContent {{
-                background-color: #212121;
-                border: none;
-                border-radius: {config.S(14)}px;
+            QFrame#CenteredPill, QFrame#ViewToggleGroup {{
+                background-color: #262626;
+                border: 1px solid #303030;
+                border-radius: {pill_r}px;
             }}
             QWidget#TabContainer {{
                 background: transparent;
@@ -208,15 +286,19 @@ class AudioPreviewWidget(QFrame):
                 width: 0px;
             }}
             QSlider::groove:horizontal {{
-                height: {config.S(4)}px;
-                background: rgba(255, 255, 255, 0.10);
-                border-radius: {config.S(2)}px;
+                height: {config.S(3)}px;
+                background: #303030;
+                border-radius: 1px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: #a3a3a3;
+                border-radius: 1px;
             }}
             QSlider::handle:horizontal {{
-                background: #d0d0d0;
-                width: {config.S(10)}px;
-                margin: -{config.S(3)}px 0px;
-                border-radius: {config.S(5)}px;
+                background: #d4d4d4;
+                width: {knob}px;
+                margin: -{config.S(4)}px 0px;
+                border-radius: {knob_r}px;
                 border: 0px solid transparent;
             }}
             QSlider::handle:horizontal:hover {{
@@ -245,10 +327,10 @@ class AudioPreviewWidget(QFrame):
             }}
             QSlider#SeekSlider::handle:horizontal {{
                 background: #ffffff;
-                width: {config.S(10)}px;
-                height: {config.S(10)}px;
-                margin: -{config.S(3)}px 0px;
-                border-radius: {config.S(5)}px;
+                width: {knob}px;
+                height: {knob}px;
+                margin: -{config.S(4)}px 0px;
+                border-radius: {knob_r}px;
                 border: 0px solid transparent;
             }}
             QSlider#SeekSlider::handle:horizontal:hover {{
@@ -256,29 +338,36 @@ class AudioPreviewWidget(QFrame):
                 border: 1px solid #1ed760;
             }}
             QLabel#TimecodeLabel {{
-                font-family: 'JetBrains Mono', 'Consolas', 'Menlo', monospace;
+                font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
                 font-size: {config.FS(9.5)}pt;
-                font-weight: bold;
+                font-weight: 600;
                 color: #ffffff;
                 letter-spacing: 0.5px;
+                background-color: #262626;
+                border: 1px solid #303030;
+                border-radius: {pill_r}px;
+                padding: 0px {config.S(12)}px;
+            }}
+            QLabel#CenteredLabel {{
+                color: #d4d4d4;
+                font-size: {config.FS(9)}pt;
             }}
             QLabel#StatusLabel {{
-                color: #666666;
-                font-style: italic;
+                color: #8a8a8a;
                 font-size: {config.FS(9)}pt;
             }}
         """)
 
         dock_layout = QVBoxLayout(self)
-        # A floating card: a margin all round, rounded corners (QWidget#AudioContent)
-        dock_layout.setContentsMargins(config.S(12), config.S(4), config.S(12), config.S(12))
+        # One full-width surface under a hairline (QFrame#AudioPreview's top border)
+        dock_layout.setContentsMargins(0, 0, 0, 0)
         dock_layout.setSpacing(0)
 
         # 1. Main Collapsible Content Container
         self.content_widget = QWidget()
         self.content_widget.setObjectName("AudioContent")
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(0, config.S(6), 0, 0)
+        self.content_layout.setContentsMargins(config.S(14), config.S(4), config.S(14), config.S(12))
         self.content_layout.setSpacing(0)
         self.content_widget.setAttribute(Qt.WA_StyledBackground, True)
         dock_layout.addWidget(self.content_widget)
@@ -290,6 +379,19 @@ class AudioPreviewWidget(QFrame):
 
         if parent_widget:
             parent_widget.installEventFilter(self)
+
+        # 2b. The Recording switch is on: say so above the player, plainly (amber, like a warning)
+        _tb = self.main_window.txt if self.main_window else (lambda k, d=None: d or k)
+        self.lbl_recording_banner = QLabel(_tb("player_recording_banner", "Playing the original recording — not the story. Turn off Play original to hear the story."))
+        self.lbl_recording_banner.setObjectName("RecordingBanner")
+        self.lbl_recording_banner.setAlignment(Qt.AlignCenter)
+        self.lbl_recording_banner.setWordWrap(True)
+        self.lbl_recording_banner.setStyleSheet(f"""
+            QLabel#RecordingBanner {{ background: rgba(245, 158, 11, 0.16); color: #fbbf24;
+                border: 1px solid rgba(245, 158, 11, 0.55); border-radius: {config.S(8)}px;
+                font-weight: 600; font-size: {config.FS(9.5)}pt; padding: {config.S(5)}px {config.S(12)}px; }}""")
+        self.lbl_recording_banner.hide()
+        self.content_layout.addWidget(self.lbl_recording_banner)
 
         # 3. Status Label (for fetching / missing audio)
         self.lbl_status = QLabel("")
@@ -305,7 +407,7 @@ class AudioPreviewWidget(QFrame):
         # 4. Top Seek Progress Slider (spans between left and right side panels)
         self.seek_bar_container = QWidget()
         self.seek_bar_container.setObjectName("SeekBarContainer")
-        self.seek_bar_container.setFixedHeight(config.S(6))
+        self.seek_bar_container.setFixedHeight(knob)
         seek_h_layout = QHBoxLayout(self.seek_bar_container)
         seek_h_layout.setContentsMargins(0, 0, 0, 0)
         seek_h_layout.setSpacing(0)
@@ -319,7 +421,7 @@ class AudioPreviewWidget(QFrame):
         self.slider_seek.setObjectName("SeekSlider")
         self.slider_seek.setRange(0, 1000)
         self.slider_seek.setValue(0)
-        self.slider_seek.setFixedHeight(config.S(6))
+        self.slider_seek.setFixedHeight(knob)
         self.slider_seek.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._seek_dragging = False
         self.slider_seek.sliderPressed.connect(self._on_seek_pressed)
@@ -335,62 +437,88 @@ class AudioPreviewWidget(QFrame):
         # 5. Controls Row (Timecode | Buttons | Playback | Volume)
         self.controls_widget = QWidget()
         self.controls_widget.setObjectName("AudioControls")
-        self.controls_widget.setFixedHeight(config.S(48))
+        # Tall enough for the control height plus breathing room; a minimum, so larger text never clips
+        self.controls_widget.setMinimumHeight(ctrl_h + config.S(18))
         controls_layout = QHBoxLayout(self.controls_widget)
-        controls_layout.setContentsMargins(config.S(16), 0, config.S(16), 0)
-        controls_layout.setSpacing(config.S(16))
+        controls_layout.setContentsMargins(0, config.S(8), 0, config.S(10))
+        controls_layout.setSpacing(config.S(12))
 
         # --- Left Section: Timecode + Centered + Modularity Toggles ---
         left_widget = QWidget()
         left_layout = QHBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(config.S(10))
+        left_layout.setSpacing(config.S(8))
 
         self.lbl_timecode = QLabel("01:00:00:00")
         self.lbl_timecode.setObjectName("TimecodeLabel")
-        self.lbl_timecode.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        left_layout.addWidget(self.lbl_timecode)
-        left_layout.addSpacing(config.S(4))
+        self.lbl_timecode.setAlignment(Qt.AlignCenter)
+        self.lbl_timecode.setFixedHeight(ctrl_h)
+        self.lbl_timecode.setText("0:00")
+        left_layout.addWidget(self.lbl_timecode, 0, Qt.AlignVCenter)
+
+        # Keep centered: switch + label in one quiet pill
+        centered_pill = QFrame()
+        centered_pill.setObjectName("CenteredPill")
+        centered_pill.setFixedHeight(ctrl_h)
+        centered_layout = QHBoxLayout(centered_pill)
+        centered_layout.setContentsMargins(config.S(6), 0, config.S(12), 0)
+        centered_layout.setSpacing(config.S(8))
 
         self.tgl_centered = ToggleSwitch(parent=self)
         self.tgl_centered.toggled.connect(self._on_tgl_centered_changed)
-        left_layout.addWidget(self.tgl_centered)
+        centered_layout.addWidget(self.tgl_centered, 0, Qt.AlignVCenter)
 
         self.lbl_centered = QLabel(self.main_window.txt("msg_keep_centered") if self.main_window else "Keep centered")
-        self.lbl_centered.setStyleSheet(f"color: #b0b0b0; font-size: {config.FS(9)}pt;")
-        left_layout.addWidget(self.lbl_centered)
-        left_layout.addSpacing(config.S(6))
+        self.lbl_centered.setObjectName("CenteredLabel")
+        centered_layout.addWidget(self.lbl_centered, 0, Qt.AlignVCenter)
+        left_layout.addWidget(centered_pill, 0, Qt.AlignVCenter)
 
-        # Modularity Buttons: Waveform Timeline & Video Preview Toggles
+        # Modularity Buttons: Waveform Timeline & Video Preview Toggles, as one segmented pill
+        view_group = QFrame()
+        view_group.setObjectName("ViewToggleGroup")
+        view_group.setFixedHeight(ctrl_h)
+        view_layout = QHBoxLayout(view_group)
+        view_pad = max(1, (ctrl_h - config.S(26)) // 2 - 1)
+        view_layout.setContentsMargins(view_pad, 0, view_pad, 0)
+        view_layout.setSpacing(config.S(2))
+
         self.btn_toggle_timeline = PreviewToggleBtn("timeline", parent=self)
         self.btn_toggle_timeline.setChecked(self.show_timeline)
         self.btn_toggle_timeline.setToolTip(self.main_window.txt("tt_toggle_timeline", "Toggle Timeline Preview") if self.main_window else "Toggle Timeline")
         self.btn_toggle_timeline.clicked.connect(self.toggle_timeline_preview)
-        left_layout.addWidget(self.btn_toggle_timeline)
+        view_layout.addWidget(self.btn_toggle_timeline, 0, Qt.AlignVCenter)
 
-        self.btn_toggle_video = PreviewToggleBtn("video", parent=self)
+        _tv = self.main_window.txt if self.main_window else (lambda k, d=None: d or k)
+        self.btn_toggle_video = PreviewToggleBtn("video", parent=self, label=_tv("preview_video_btn", "Video"))
         self.btn_toggle_video.setChecked(self.show_video)
-        self.btn_toggle_video.setToolTip(self.main_window.txt("tt_toggle_video", "Toggle Video Preview") if self.main_window else "Toggle Video Preview")
         self.btn_toggle_video.clicked.connect(self.toggle_video_preview)
-        left_layout.addWidget(self.btn_toggle_video)
+        self._update_video_button()
+        view_layout.addWidget(self.btn_toggle_video, 0, Qt.AlignVCenter)
+        left_layout.addWidget(view_group, 0, Qt.AlignVCenter)
 
-        # Play edit: play the edit as Assemble will build it (cuts skipped, AI order kept)
+        # Recording: hear the original recording instead of the story (off by default; turns itself off
+        # when the page changes or a timeline opens). Story playback needs no button: it is always on.
         _t = self.main_window.txt if self.main_window else (lambda k, d=None: d or k)
-        self.btn_play_edit = QPushButton(_t("btn_play_edit"))
-        self.btn_play_edit.setCheckable(True)
-        self.btn_play_edit.setCursor(Qt.PointingHandCursor)
-        self.btn_play_edit.setToolTip(_t("tt_play_edit"))
-        self.btn_play_edit.setFixedHeight(config.S(24))
-        self.btn_play_edit.setStyleSheet(f"""
-            QPushButton {{ background: #2a2a2a; color: #c0c0c0; border: 1px solid transparent;
-                border-radius: {config.S(12)}px; padding: 0 {config.S(12)}px; font-size: {config.FS(9)}pt; }}
-            QPushButton:hover {{ color: #ffffff; background: #323232; }}
-            QPushButton:checked {{ background: rgba(168, 85, 247, 0.20); color: #ffffff; border-color: #a855f7; font-weight: bold; }}
-            QPushButton:disabled {{ color: #555; border-color: #333; }}
-        """)
-        self.btn_play_edit.toggled.connect(self._on_play_edit_toggled)
-        self.btn_play_edit.toggled.connect(lambda _on: self._update_play_edit_label())
-        left_layout.addWidget(self.btn_play_edit)
+        self.recording_pill = QFrame()
+        self.recording_pill.setObjectName("CenteredPill")
+        self.recording_pill.setFixedHeight(ctrl_h)
+        self.recording_pill.setToolTip(_t("tt_player_recording", "Hear the original recording instead of the story (turns off when you change page)"))
+        rec_layout = QHBoxLayout(self.recording_pill)
+        rec_layout.setContentsMargins(config.S(6), 0, config.S(12), 0)
+        rec_layout.setSpacing(config.S(8))
+        self.tgl_recording = ToggleSwitch(parent=self)
+        self.tgl_recording.toggled.connect(self.set_recording_mode)
+        rec_layout.addWidget(self.tgl_recording, 0, Qt.AlignVCenter)
+        self.lbl_recording = QLabel(_t("player_recording", "Play original"))
+        self.lbl_recording.setObjectName("CenteredLabel")
+        rec_layout.addWidget(self.lbl_recording, 0, Qt.AlignVCenter)
+        left_layout.addWidget(self.recording_pill, 0, Qt.AlignVCenter)
+        # No story yet: the player plays the recording, said quietly
+        self.lbl_play_note = QLabel(_t("player_no_story", "No story yet · playing the recording"))
+        self.lbl_play_note.setObjectName("StatusLabel")
+        self.lbl_play_note.hide()
+        left_layout.addWidget(self.lbl_play_note, 0, Qt.AlignVCenter)
+        self.btn_play_edit = _PlayStoryCompat(self)
 
         left_layout.addStretch()
 
@@ -398,32 +526,44 @@ class AudioPreviewWidget(QFrame):
         center_widget = QWidget()
         center_layout = QHBoxLayout(center_widget)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(config.S(8))
+        center_layout.setSpacing(config.S(6))
         center_layout.setAlignment(Qt.AlignCenter)
 
-        self.btn_prev = AnimatedPlayerButton("player-backward.png", button_size=config.S(30), icon_size=config.S(14))
-        play_size = max(32, config.S(34))
-        play_icon = max(16, config.S(16))
+        skip_size = config.S(34)
+        skip_style = f"""
+            QPushButton {{ background: transparent; border: none; padding: 0px; border-radius: {skip_size // 2 - 1}px; }}
+            QPushButton:hover {{ background: #2a2a2a; }}
+            QPushButton:pressed {{ background: #333333; }}
+        """
+        self.btn_prev = AnimatedPlayerButton("player-backward.png", button_size=skip_size, icon_size=config.S(15))
+        self.btn_prev.setStyleSheet(skip_style)
+        # Round, filled play button with a dark glyph (light-theme icons and fill swap with the theme)
+        play_size = config.S(40)
+        play_icon = config.S(17)
         self.btn_play = AnimatedPlayerButton("player-play.png", button_size=play_size, icon_size=play_icon, is_circle=True)
         self.btn_play.setObjectName("PlayBtn")
         self.btn_play.setStyleSheet("QPushButton#PlayBtn { background: transparent; border: none; outline: none; }")
-        self.btn_next = AnimatedPlayerButton("player-forward.png", button_size=config.S(30), icon_size=config.S(14))
+        self.btn_next = AnimatedPlayerButton("player-forward.png", button_size=skip_size, icon_size=config.S(15))
+        self.btn_next.setStyleSheet(skip_style)
 
-        center_layout.addWidget(self.btn_prev)
-        center_layout.addWidget(self.btn_play)
-        center_layout.addWidget(self.btn_next)
+        center_layout.addWidget(self.btn_prev, 0, Qt.AlignVCenter)
+        center_layout.addSpacing(config.S(2))
+        center_layout.addWidget(self.btn_play, 0, Qt.AlignVCenter)
+        center_layout.addSpacing(config.S(2))
+        center_layout.addWidget(self.btn_next, 0, Qt.AlignVCenter)
 
         # Playback speed: next to Play, where it is seen (Shift+. / Shift+, change it too)
+        speed_h = config.S(26)
         self.cb_speed = SpeedDropdown()
         self.cb_speed.addItems(list(self.SPEEDS_LABELS))
-        self.cb_speed.setFixedWidth(config.S(52))
+        self.cb_speed.setFixedSize(config.S(56), speed_h)
         self.cb_speed.setToolTip(_t("tt_playback_speed"))
         self.cb_speed.setStyleSheet(f"""
-            QPushButton {{ background: #232323; border: 1px solid #3a3a3a; border-radius: {config.S(11)}px;
-                color: #d0d0d0; font-weight: 600; font-size: {config.FS(9)}pt; padding: {config.S(2)}px {config.S(6)}px; }}
-            QPushButton:hover {{ color: #1ed760; border-color: #1ed760; }}""")
-        center_layout.addSpacing(config.S(6))
-        center_layout.addWidget(self.cb_speed)
+            QPushButton {{ background: #262626; border: 1px solid #303030; border-radius: {speed_h // 2 - 1}px;
+                color: #d4d4d4; font-weight: 600; font-size: {config.FS(8.5)}pt; padding: 0px {config.S(6)}px; }}
+            QPushButton:hover {{ color: #ffffff; background: #333333; border-color: #3a3a3a; }}""")
+        center_layout.addSpacing(config.S(8))
+        center_layout.addWidget(self.cb_speed, 0, Qt.AlignVCenter)
 
         # --- Right Section: Speed + Volume ---
         right_widget = QWidget()
@@ -432,17 +572,16 @@ class AudioPreviewWidget(QFrame):
         right_layout.setSpacing(config.S(8))
         right_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-
         self.lbl_vol_icon = QLabel()
         self.lbl_vol_icon.setFixedSize(config.S(18), config.S(18))
         self.lbl_vol_icon.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(self.lbl_vol_icon)
+        right_layout.addWidget(self.lbl_vol_icon, 0, Qt.AlignVCenter)
 
         self.slider_vol = JumpSlider(Qt.Horizontal)
         self.slider_vol.setRange(0, 100)
         self.slider_vol.setValue(100)
-        self.slider_vol.setFixedWidth(config.S(64))
-        right_layout.addWidget(self.slider_vol)
+        self.slider_vol.setFixedSize(config.S(84), ctrl_h)
+        right_layout.addWidget(self.slider_vol, 0, Qt.AlignVCenter)
 
         controls_layout.addWidget(left_widget, 2, Qt.AlignLeft | Qt.AlignVCenter)
         controls_layout.addWidget(center_widget, 1, Qt.AlignCenter)
@@ -454,7 +593,7 @@ class AudioPreviewWidget(QFrame):
         self.media_container = QWidget()
         self.media_container.setObjectName("MediaContainer")
         self.media_layout = QHBoxLayout(self.media_container)
-        self.media_layout.setContentsMargins(config.S(16), 0, config.S(16), config.S(10))
+        self.media_layout.setContentsMargins(0, 0, 0, 0)
         self.media_layout.setSpacing(config.S(12))
 
         # Left: 16:9 Video Monitor
@@ -503,8 +642,15 @@ class AudioPreviewWidget(QFrame):
         self._source_video_path = None
         self.clean_ops = None
 
-        # Play edit: kept source ranges (seconds) in play order, and the one playing now
-        self.edit_mode = False
+        # The story: kept source ranges (seconds) in play order, and the one playing now
+        from engine.edit_preview import StoryMap
+        self.recording_mode = False
+        self._story_active = False      # the story plays (there is one, Recording is off): see _apply_play_mode
+        self._story_map = StoryMap([])  # the story's own clock (story time <-> source time, patches included)
+        self._story_hint = None
+        self._story_t = None            # story time at the last tick
+        self._story_sig = None
+        self._seg_ver = 0
         self._edit_segments = []
         self._edit_idx = -1
         # Smooth Play edit: a rendered preview of the edit replaces the jumping source once ready
@@ -522,6 +668,18 @@ class AudioPreviewWidget(QFrame):
         self.player.mediaStatusChanged.connect(self._on_media_status_for_switch)
         # While paused, nothing else re-syncs once a seek lands
         self.player.positionChanged.connect(self._on_position_changed_paused)
+        # Voice patches in the story play here too (gui/components/patch_playback.py)
+        from gui.components.patch_playback import PatchPlayback
+        self.patch_playback = PatchPlayback(self)
+        # The story changes in many places (board, cut settings, voice patches): look once a second
+        self._story_watch = QTimer(self)
+        self._story_watch.setInterval(1000)
+        self._story_watch.timeout.connect(self._refresh_story)
+        self._story_watch.start()
+        # The Recording switch turns itself off when the page changes
+        stack = getattr(self.main_window, "_stack", None)
+        if stack is not None and hasattr(stack, "currentChanged"):
+            stack.currentChanged.connect(lambda _i: self.set_recording_mode(False))
 
         self.hide()
 
@@ -536,28 +694,78 @@ class AudioPreviewWidget(QFrame):
         self._save_modularity_prefs()
 
     def toggle_video_preview(self) -> None:
-        """Toggles visibility of the 16:9 Video Monitor."""
-        self.show_video = self.btn_toggle_video.isChecked()
+        """Shows or hides the video pane; the choice is remembered (preview_show_video)."""
+        self._video_pref = self.btn_toggle_video.isChecked()
+        self.show_video = self._video_wanted()
         self._apply_modularity_state()
         self._save_modularity_prefs()
+
+    def _video_wanted(self) -> bool:
+        """The user's choice; automatic (None): shown only when the timeline has a video of its own."""
+        return self._video_pref if self._video_pref is not None else bool(self._has_video)
+
+    def _set_has_video(self, has_video: bool) -> None:
+        self._has_video = bool(has_video)
+        wanted = self._video_wanted()
+        if wanted != self.show_video:
+            self.show_video = wanted
+            self._apply_modularity_state()
+        else:
+            self._update_video_button()
+
+    def _update_video_button(self) -> None:
+        btn = getattr(self, "btn_toggle_video", None)
+        if btn is None:
+            return
+        _t = self.main_window.txt if self.main_window else (lambda k, d=None: d or k)
+        if btn.isChecked() != self.show_video:
+            btn.setChecked(self.show_video)
+        if self.show_video:
+            tip = _t("tt_video_hide", "Hide the video (the waveform takes the room)")
+        elif self._has_video:
+            tip = _t("tt_video_show", "Show the video")
+        else:
+            tip = _t("tt_video_none", "Show the video area (this timeline has no video of its own: audio only)")
+        btn.setToolTip(tip)
+        btn.setAccessibleName(_t("preview_video_btn", "Video"))
+        btn.update()
 
     def _save_modularity_prefs(self) -> None:
         if self.main_window and hasattr(self.main_window, "engine"):
             prefs = self.main_window.engine.load_preferences() or {}
             prefs["show_timeline_preview"] = self.show_timeline
-            prefs["show_video_preview"] = self.show_video
+            prefs["preview_show_video"] = self._video_pref
             self.main_window.engine.save_preferences(prefs)
+
+    MEDIA_H = 235        # the waveform / video height (unscaled) on a roomy window
+    MEDIA_H_MIN = 96     # never squeezed below this
+
+    def _media_height(self) -> int:
+        """Height of the waveform and video. Below 900 px of window height the whole expanded dock keeps to
+        about 28% of the window, so the page above keeps most of a small screen."""
+        full = config.S(self.MEDIA_H)
+        win = self.main_window
+        wh = win.height() if win is not None and hasattr(win, "height") else 0
+        if not wh or wh >= 900:
+            return full
+        m = self.content_layout.contentsMargins()
+        mm = self.media_layout.contentsMargins()
+        chrome = (m.top() + m.bottom() + self.seek_bar_container.height() + mm.top() + mm.bottom()
+                  + max(self.controls_widget.minimumHeight(), self.controls_widget.sizeHint().height()))
+        return max(config.S(self.MEDIA_H_MIN), min(full, int(wh * 0.28) - chrome))
 
     def _apply_modularity_state(self) -> None:
         """Updates visibility of video, timeline, and media container based on toggle states."""
         self.waveform_timeline.setVisible(self.show_timeline)
         self.video_preview_widget.setVisible(self.show_video)
+        self._update_video_button()
 
         has_media = self.show_timeline or self.show_video
         self.media_container.setVisible(has_media)
 
         # Resize video preview to maintain 16:9 aspect ratio relative to container
-        target_h = config.S(235)
+        target_h = self._media_height()
+        self._applied_media_h = target_h
         self.video_preview_widget.setFixedHeight(target_h)
         self.video_preview_widget.setFixedWidth(int(target_h * 16.0 / 9.0))
         self.waveform_timeline.setFixedHeight(target_h)
@@ -597,6 +805,9 @@ class AudioPreviewWidget(QFrame):
     def eventFilter(self, watched, event):
         if watched == self.parentWidget() and event.type() == QEvent.Resize:
             self.update_tab_position()
+            # the window got taller or shorter: the dock's height follows (small windows: ~28%)
+            if getattr(self, "_applied_media_h", None) is not None and self._media_height() != self._applied_media_h:
+                self._apply_modularity_state()
         return super().eventFilter(watched, event)
 
     def resizeEvent(self, event):
@@ -622,11 +833,13 @@ class AudioPreviewWidget(QFrame):
                 p_tl = stack.mapToGlobal(QPointF(0, 0).toPoint())
                 p_tr = stack.mapToGlobal(QPointF(stack.width(), 0).toPoint())
 
-                self_tl = self.mapFromGlobal(p_tl)
-                self_tr = self.mapFromGlobal(p_tr)
+                # Measured in the seek row's own coordinates, so the dock's side padding is accounted for
+                row = self.seek_bar_container
+                row_tl = row.mapFromGlobal(p_tl)
+                row_tr = row.mapFromGlobal(p_tr)
 
-                w_left = max(0, int(self_tl.x()))
-                w_right = max(0, int(self.width() - self_tr.x()))
+                w_left = max(0, int(row_tl.x()))
+                w_right = max(0, int(row.width() - row_tr.x()))
 
                 if self.seek_spacer_left.width() != w_left:
                     self.seek_spacer_left.setFixedWidth(w_left)
@@ -641,8 +854,11 @@ class AudioPreviewWidget(QFrame):
                 w_left = (sb_l.width() if sb_l and sb_l.isVisible() else 0) + (p_l.width() if p_l and p_l.isVisible() else 0)
                 w_right = (sb_r.width() if sb_r and sb_r.isVisible() else 0) + (p_r.width() if p_r and p_r.isVisible() else 0)
 
-                self.seek_spacer_left.setFixedWidth(max(0, w_left))
-                self.seek_spacer_right.setFixedWidth(max(0, w_right))
+                # The seek row sits inside the dock's side padding
+                pad_l = self.content_layout.contentsMargins().left()
+                pad_r = self.content_layout.contentsMargins().right()
+                self.seek_spacer_left.setFixedWidth(max(0, w_left - pad_l))
+                self.seek_spacer_right.setFixedWidth(max(0, w_right - pad_r))
         except Exception:
             pass
 
@@ -655,9 +871,14 @@ class AudioPreviewWidget(QFrame):
         return self.isVisible() and not getattr(self, "is_collapsed", False)
 
     def _get_expanded_target_height(self) -> int:
-        h = self.controls_widget.sizeHint().height() + self.slider_seek.height()
+        m = self.content_layout.contentsMargins()
+        h = (m.top() + m.bottom() + self.seek_bar_container.height()
+             + max(self.controls_widget.minimumHeight(), self.controls_widget.sizeHint().height()))
         if self.show_timeline or self.show_video:
-            h += config.S(235) + config.S(14)
+            mm = self.media_layout.contentsMargins()
+            h += self._media_height() + mm.top() + mm.bottom()
+        if not self.lbl_recording_banner.isHidden():
+            h += self.lbl_recording_banner.sizeHint().height()
         return max(50, h)
 
     def toggle_collapse(self) -> None:
@@ -724,7 +945,7 @@ class AudioPreviewWidget(QFrame):
     def _show_missing_audio_ui(self, is_loading=False, failed=False):
         if is_loading:
             loading_txt = self.main_window.txt("msg_audio_preview_preparing") if self.main_window else "Preparing preview..."
-            self.lbl_status.setText(f"<span style='color: #b0b0b0;'>{loading_txt}</span>")
+            self.lbl_status.setText(f"<span style='color: {qc('#a3a3a3').name()};'>{loading_txt}</span>")
         elif failed:
             failed_txt = self.main_window.txt("msg_audio_preview_failed") if self.main_window else "Failed to get audio. Click to retry."
             html = f"<a href='fetch_audio' style='color: #e74c3c; text-decoration: none;'>{failed_txt}</a>"
@@ -732,8 +953,18 @@ class AudioPreviewWidget(QFrame):
         else:
             prefix = self.main_window.txt("msg_audio_preview_missing") if self.main_window else "Audio not found."
             link_txt = self.main_window.txt("msg_audio_preview_get_now") if self.main_window else "Get preview audio"
-            html = f"{prefix} <a href='fetch_audio' style='color: #1a7a45; text-decoration: underline;'>{link_txt}</a>"
+            html = f"{prefix} <a href='fetch_audio' style='color: {qc('#23a559').name()}; text-decoration: underline;'>{link_txt}</a>"
             self.lbl_status.setText(html)
+            # The preview loads by itself: fetch the audio once per transcript (the link stays for a retry)
+            snap = getattr(self.main_window, "_transcription_source", None) or {}
+            canvas = getattr(self.main_window, "text_canvas", None)
+            words = getattr(canvas, "words_data", None) or []
+            key = (snap.get("timeline_name") or snap.get("source_file") or "",
+                   words[0].get("meta_audio_path") if words else None, len(words))
+            if words and getattr(self, "_auto_fetch_key", None) != key:
+                self._auto_fetch_key = key
+                from PySide6.QtCore import QTimer as _QT
+                _QT.singleShot(300, self._on_fetch_missing_audio)
 
         self.lbl_status.show()
         self.controls_widget.hide()
@@ -895,12 +1126,20 @@ class AudioPreviewWidget(QFrame):
         # Set media player source
         target_source = video_file if (video_file and self.clean_ops is None) else audio_path
         if self._source_audio_path != target_source:
+            # Another recording: a smooth preview of the old one means nothing now
+            self._cancel_preview_render()
+            self._preview_on = False
+            self._preview_map = []
+            self._pending_switch = None
+            self._story_active = False
             self._source_audio_path = target_source
             self.original_audio_path = target_source
             self.player.setSource(QUrl.fromLocalFile(target_source))
             self.clean_ops = None
             self.current_word_idx = -1
             self.last_jumped_ts = -1.0
+        # No video: the pane stays out of the way unless the user asked for it (the Video button)
+        self._set_has_video(bool(video_file))
         if video_file:
             self.video_preview_widget.show_placeholder(False)
         else:
@@ -910,6 +1149,9 @@ class AudioPreviewWidget(QFrame):
         # Configure Waveform Timeline Ribbon
         self.waveform_timeline.load_from_audio(audio_path, clip_name=clip_name)
         self.waveform_timeline.set_words_data(words)
+        # A timeline opened: the story plays (the Recording switch turns itself off)
+        self.set_recording_mode(False)
+        self._refresh_story(force=True)
 
     def _video_matches_timeline(self, video_file: str, audio_path: str, source_files) -> bool:
         """True when the video can stand in for the timeline: a single source clip as long as the timeline audio."""
@@ -946,6 +1188,8 @@ class AudioPreviewWidget(QFrame):
             self.lbl_status.hide()
             self.controls_widget.show()
             self.slider_seek.show()
+            self._has_video = False          # the assembled audio has no picture
+            self.show_video = self._video_wanted()
             self._apply_modularity_state()
 
             if getattr(self, "is_collapsed", False):
@@ -961,12 +1205,24 @@ class AudioPreviewWidget(QFrame):
 
             self.waveform_timeline.load_from_audio(assembled_audio_path, clip_name="A1: Assembled Timeline")
             self.waveform_timeline.set_words_data([])
+            self.recording_mode = False
+            self._refresh_story(force=True)
 
     # -------------------------------------------------------------------------
     # Playback Controls & Sync
     # -------------------------------------------------------------------------
 
     def set_position_ms(self, ms: int, force_word_idx: Optional[int] = None) -> None:
+        pp = getattr(self, "patch_playback", None)
+        if pp is not None and (pp.active is not None or pp.holding):
+            was_holding = pp.holding
+            pp.cancel()
+            if was_holding:                    # the recording was only waiting for the patch: go on from the new spot
+                self.player.setPosition(ms)
+                self._start_pos_s = ms / 1000.0
+                self._real_start_time = time.time()
+                self.player.play()
+                return
         self.player.setPosition(ms)
         self._pending_seek = (ms / 1000.0, time.time())
         self._start_pos_s = ms / 1000.0
@@ -976,53 +1232,219 @@ class AudioPreviewWidget(QFrame):
             self._force_highlight_idx = force_word_idx
             self._force_highlight_until = time.time() + 0.3
 
-        self.waveform_timeline.set_playhead_time(self._start_pos_s)
-        self.sync_playback()
+        self.sync_playback()   # the playhead, the readout and the word follow (in story time while it plays)
 
     # -------------------------------------------------------------------------
-    # Play edit
+    # The story plays everywhere (and the Recording switch)
     # -------------------------------------------------------------------------
+
+    @property
+    def edit_mode(self) -> bool:
+        """True while the story plays (kept for code that asked the old Play story button)."""
+        return self._story_active
+
+    @edit_mode.setter
+    def edit_mode(self, _value) -> None:
+        pass   # there is no Play story switch any more: the story plays whenever there is one
+
+    def _has_story(self) -> bool:
+        story = getattr(self.main_window, "_story", None) if self.main_window else None
+        return bool(story and story.get("clips"))
+
+    def _story_on(self) -> bool:
+        return bool(self._edit_segments and self._has_story() and not self.recording_mode and not self.clean_ops)
+
+    def set_recording_mode(self, on: bool) -> None:
+        """The Recording switch: True = the original recording plays (raw: no cuts, no patches), False = the story."""
+        on = bool(on) and self._has_story() and not self.clean_ops
+        if on == self.recording_mode:
+            if self.tgl_recording.isChecked() != on:
+                self.tgl_recording.blockSignals(True)
+                self.tgl_recording.setChecked(on, animated=False)
+                self.tgl_recording.blockSignals(False)
+            return
+        self.recording_mode = on
+        if self.tgl_recording.isChecked() != on:
+            self.tgl_recording.blockSignals(True)
+            self.tgl_recording.setChecked(on, animated=False)
+            self.tgl_recording.blockSignals(False)
+        pp = getattr(self, "patch_playback", None)
+        if pp is not None and on:
+            pp.cancel()
+        self._refresh_story(force=True)
+        self.recording_mode_changed.emit(on)
 
     def set_edit_segments(self, segments) -> None:
-        """segments: [(start_s, end_s), ...] of the source, in the order the edit plays them."""
+        """segments: [(start_s, end_s), ...] of the source, in the order the story plays them."""
         segments = list(segments or [])
         if segments == self._edit_segments:
+            self._refresh_story()
             return
         self._edit_segments = segments
         self._edit_idx = -1
-        self.btn_play_edit.setEnabled(bool(segments))
-        if not segments and self.btn_play_edit.isChecked():
-            self.btn_play_edit.setChecked(False)
-            return
-        if self.edit_mode:
-            # The edit changed: jump in the source again until the new preview is ready
+        self._seg_ver += 1
+        if self._story_active and self._story_on():
+            # The story changed: jump in the source again until the new smooth preview is ready
             if self._preview_on:
                 self._leave_preview()
             self._preview_debounce.start()
+        self._refresh_story(force=True)
 
-    def _on_play_edit_toggled(self, checked: bool) -> None:
-        self.edit_mode = bool(checked)
+    def _story_patches(self):
+        """[(a, b, length in the story, tag)] of the voice patches the story plays."""
+        pp = getattr(self, "patch_playback", None)
+        if pp is None:
+            return []
+        out = []
+        try:
+            for p in pp.patches():
+                if not pp._in_story(p):
+                    continue
+                a, b = float(p["a"]), float(p["b"])
+                if p.get("length") == "close":
+                    n = float(p.get("patch_s") or pp._file(p)[1] or (b - a))
+                else:
+                    n = b - a
+                out.append((a, b, n, str(p.get("end_id", "patch"))))
+        except Exception as exc:
+            log_error(f"story map: voice patches: {exc}")
+        return out
+
+    def _refresh_story(self, force: bool = False) -> None:
+        """Rebuild the story's clock and the ribbon when the story, its patches or the mode changed."""
+        pp = getattr(self, "patch_playback", None)
+        try:
+            pp_sig = (pp.patches() and pp._sig) if pp is not None else None
+        except Exception:
+            pp_sig = None
+        try:
+            import story_time as st
+            spans_id = id(st._cache.get("spans")) if self._has_story() else None
+        except Exception:
+            spans_id = None
+        sig = (self._seg_ver, self._has_story(), pp_sig, self.recording_mode, self.clean_ops is None, spans_id)
+        if not force and sig == self._story_sig:
+            return
+        self._story_sig = sig
+        from engine.edit_preview import StoryMap
+        if self._edit_segments and self._has_story():
+            self._story_map = StoryMap(self._edit_segments, self._story_patches())
+        else:
+            self._story_map = StoryMap([])
+        self._story_hint = None
+        self._apply_play_mode()
+        self._update_story_view()
+
+    def _apply_play_mode(self) -> None:
+        """Switch between the story and the recording (or keep what plays), keeping the spot heard."""
+        on = self._story_on()
+        if on == self._story_active:
+            return
+        self._story_active = on
         self._edit_idx = -1
-        if not checked:
+        playing = self.player.playbackState() == QMediaPlayer.PlayingState
+        if on:
+            if self._preview_on:      # a smooth preview from before: the story map may have changed
+                self._leave_preview()
+            src_t = self._get_audio_t()
+            if self._story_map.to_story(src_t)[0] is None:
+                # not in the story: from its start (paused) / the nearest story moment (playing)
+                t = self._story_map.to_source(0.0)[0] if not playing else self._story_map.snap(src_t)
+                if t is not None:
+                    self._seek_player_to_source(t)
+            self._start_preview_render()
+        else:
             self._cancel_preview_render()
             if self._preview_on:
-                self._leave_preview()
-            self._update_play_edit_label()
+                self._leave_preview()     # back to the recording at the same moment
+
+    def _update_story_view(self) -> None:
+        """The ribbon, the banner, the switch and the quiet note follow the mode."""
+        _t = self.main_window.txt if self.main_window else (lambda k, d=None: d or k)
+        has_story = self._has_story() and bool(self._edit_segments) and not self.clean_ops
+        wt = self.waveform_timeline
+        if self._story_active:
+            m = self._story_map
+            blocks = []
+            try:
+                import story_time as st
+                starts = st.clip_starts(self.main_window)
+                blocks = [(t, k) for k, t in enumerate(starts) if k > 0 and t is not None]
+            except Exception:
+                pass
+            import story_time as st
+            label = _t("timeline_chip_story", "Story · {length}").format(length=st.fmt_time(m.length))
+            wt.set_story_view(m.runs, m.length, blocks, label)
+        elif self.recording_mode:
+            wt.set_recording_view(_t("timeline_chip_recording", "Recording · {name}").format(name=wt._clip_name))
+        else:
+            wt.set_recording_view("")
+        self.lbl_recording_banner.setVisible(self.recording_mode)
+        self.recording_pill.setEnabled(has_story)
+        self.lbl_recording.setEnabled(has_story)
+        self.recording_pill.setVisible(has_story or self.clean_ops is None)
+        no_story = not has_story and not self.clean_ops
+        self.lbl_play_note.setVisible(no_story and bool(self._source_audio_path))
+        self.recording_pill.setToolTip(_t("tt_player_recording", "Hear the original recording instead of the story (turns off when you change page)")
+                                       if has_story else _t("tt_player_recording_no_story", "There's no story yet: the player plays the recording."))
+        self.sync_playback()
+
+    # --- The story's clock ---------------------------------------------------
+
+    def story_length(self) -> float:
+        return float(self._story_map.length) if self._story_active else 0.0
+
+    def story_time_now(self):
+        """Story time of the playhead (None when the story isn't playing)."""
+        if not self._story_active:
+            return None
+        return self._story_time_of(self._current_source_t())
+
+    def _story_time_of(self, src_t: float):
+        T, i = self._story_map.to_story(src_t, self._story_hint)
+        if T is None:
+            return None
+        self._story_hint = i
+        return T
+
+    def _current_source_t(self) -> float:
+        """The recording's time at the playhead, whatever plays (the smooth preview, a voice patch...)."""
+        pp = getattr(self, "patch_playback", None)
+        vt = pp.virtual_source_t() if pp is not None and pp.holding else None
+        if vt is not None:
+            return vt
+        audio_t = max(0.0, self._get_audio_t())
+        if self.clean_ops:
+            return self._audio_to_original_time(audio_t)
+        return self._preview_to_source(audio_t) if self._preview_on else audio_t
+
+    def _seek_player_to_source(self, t: float, force_word_idx: Optional[int] = None) -> None:
+        """Put the player at source time t (in the smooth preview when it plays)."""
+        pos = self._source_to_preview(t) if self._preview_on else t
+        if self._pending_switch is not None:          # a source switch is landing: it goes there instead
+            self._pending_switch[0] = max(0.0, pos)
+            self._start_pos_s = pos
+            self._pending_seek = (pos, time.time())
+            self.sync_playback()
             return
-        if self._edit_segments and self.player.playbackState() != QMediaPlayer.PlayingState:
-            # Start from the beginning of the edit unless the playhead already sits inside it
-            if self._locate_edit_segment(self._get_audio_t(), inside_only=True) is None:
-                self._edit_seek(self._edit_segments[0][0])
-        self._start_preview_render()
+        self._edit_idx = -1
+        self.set_position_ms(int(round(pos * 1000)), force_word_idx=force_word_idx)
+
+    def seek_story_time(self, T: float, force_word_idx: Optional[int] = None) -> None:
+        """Seek to story time T (the ribbon, the seek bar, skip). Without a story: the recording's time."""
+        if not self._story_active:
+            self.set_position_ms(int(max(0.0, T) * 1000), force_word_idx=force_word_idx)
+            return
+        t, i = self._story_map.to_source(T)
+        if t is None:
+            return
+        self._story_hint = i
+        self._seek_player_to_source(t, force_word_idx)
 
     # --- Smooth preview -----------------------------------------------------
 
     def _update_play_edit_label(self, pct=None) -> None:
-        _t = self.main_window.txt if self.main_window else (lambda k, d=None: d or k)
-        text = ("●  " if self.edit_mode else "") + _t("btn_play_edit")
-        if pct is not None:
-            text += f" · {int(pct * 100)}%"
-        self.btn_play_edit.setText(text)
+        pass   # the Play story button is gone; the smooth preview renders quietly
 
     def _cancel_preview_render(self) -> None:
         self._preview_debounce.stop()
@@ -1034,7 +1456,7 @@ class AudioPreviewWidget(QFrame):
     def _start_preview_render(self) -> None:
         self._cancel_preview_render()
         source = self._source_audio_path
-        if not (self.edit_mode and self._edit_segments and source and os.path.exists(source)) or self.clean_ops:
+        if not (self._story_active and self._edit_segments and source and os.path.exists(source)) or self.clean_ops:
             return
         try:
             from engine.edit_preview import EditPreviewRender
@@ -1045,7 +1467,7 @@ class AudioPreviewWidget(QFrame):
             self._preview_job.start()
             self._preview_poll.start()
         except Exception as e:
-            log_error(f"Play edit: preview render could not start: {e}")
+            log_error(f"Story playback: preview render could not start: {e}")
             self._preview_job = None
 
     def _poll_preview_render(self) -> None:
@@ -1054,17 +1476,14 @@ class AudioPreviewWidget(QFrame):
             self._preview_poll.stop()
             return
         if job.error:
-            log_error(f"Play edit: preview render failed ({job.error}); jumping in the source instead")
+            log_error(f"Story playback: preview render failed ({job.error}); jumping in the source instead")
             self._cancel_preview_render()
-            self._update_play_edit_label()
             return
         if not job.done:
-            self._update_play_edit_label(job.progress)
             return
         self._preview_poll.stop()
         self._preview_job = None
-        self._update_play_edit_label()
-        if self.edit_mode and not self.clean_ops and os.path.exists(job.output):
+        if self._story_active and not self.clean_ops and os.path.exists(job.output):
             self._enter_preview(job.output, job.timeline)
 
     def _enter_preview(self, path: str, timeline) -> None:
@@ -1125,23 +1544,40 @@ class AudioPreviewWidget(QFrame):
 
     def seek_source_time(self, t: float, force_word_idx: Optional[int] = None) -> None:
         """Seek to a time of the source recording, whatever the player is showing right now.
-        A spot outside the edit means the user wants the recording itself: Play edit turns off."""
-        if (self.edit_mode and self._edit_segments and not self.clean_ops
-                and self._locate_edit_segment(t, inside_only=True) is None):
-            self.btn_play_edit.setChecked(False)  # leaves the preview (source switch pending)
-            if self._pending_switch is not None:
-                self._pending_switch[0] = max(0.0, t)
-                self.waveform_timeline.set_playhead_time(t)
-                return
+        While the story plays: there in the story; a moment the story doesn't hold goes to the nearest moment
+        it does (never a silent switch to the recording). Recording on / no story: the recording itself."""
         if self.clean_ops:
-            t = self._original_to_audio_time(t)
-        elif self._preview_on:
-            t = self._source_to_preview(t)
-        self.set_position_ms(int(t * 1000), force_word_idx=force_word_idx)
+            self.set_position_ms(int(self._original_to_audio_time(t) * 1000), force_word_idx=force_word_idx)
+            return
+        if self._story_active:
+            t = self._story_map.snap(float(t))
+            self._story_hint = self._story_map.to_story(t)[1]
+            self._seek_player_to_source(t, force_word_idx)
+            return
+        self._seek_player_to_source(max(0.0, float(t)), force_word_idx)
+
+    def _offset_s(self) -> float:
+        """The cut offset (prefs "offset"), read at most once a second (the readout asks every frame)."""
+        now = time.time()
+        if now - getattr(self, "_offset_at", 0.0) > 1.0:
+            self._offset_at = now
+            try:
+                self._offset_val = float((self.main_window.engine.load_preferences() or {}).get("offset", 0.133))
+            except Exception:
+                self._offset_val = getattr(self, "_offset_val", 0.133)
+        return getattr(self, "_offset_val", 0.133)
+
+    def pause_for_other_player(self) -> None:
+        """Another player (Review cuts, Voice patch) starts: the story stops so the two don't play together."""
+        pp = getattr(self, "patch_playback", None)
+        if pp is not None:
+            pp.cancel()
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.player.pause()
 
     def _locate_edit_segment(self, t: float, inside_only: bool = False):
         for i, (s, e) in enumerate(self._edit_segments):
-            if s - 0.01 <= t < e:
+            if s - 0.03 <= t < e:      # frame rounding moves a segment's start by up to ~0.02 s
                 return i
         if inside_only:
             return None
@@ -1196,15 +1632,37 @@ class AudioPreviewWidget(QFrame):
             self.sync_playback()
 
     def toggle_play(self) -> None:
+        pp = getattr(self, "patch_playback", None)
+        if pp is not None and pp.holding:      # a longer voice patch is finishing: Stop stops it, nothing resumes
+            pp.cancel()
+            self.on_state_changed(self.player.playbackState())
+            return
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
         else:
+            if self._story_active and not self._preview_on:
+                # Play plays the story: from its start when the playhead isn't in it or the story is over
+                src_t = self._get_audio_t()
+                T = self._story_map.to_story(src_t, self._story_hint)[0]
+                if T is None or T >= self._story_map.length - 0.05:
+                    self.seek_story_time(0.0)
+            elif self._story_active and self._preview_on:
+                dur = self.player.duration() / 1000.0
+                if dur > 0 and self._get_audio_t() >= dur - 0.05:
+                    self.seek_story_time(0.0)
             self._start_pos_s = self._get_audio_t()  # the clicked spot, even if the seek hasn't landed yet
             self._real_start_time = time.time()
             self.player.play()
             self.update_timer.start()
 
     def on_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
+        pp = getattr(self, "patch_playback", None)
+        if pp is not None:
+            pp.on_main_state(state == QMediaPlayer.PlayingState)
+            if pp.holding:                     # paused only while the patch finishes: still playing for the user
+                self.btn_play.update_icon("player-stop.png")
+                self.update_timer.start()
+                return
         if state == QMediaPlayer.PlayingState:
             self.btn_play.update_icon("player-stop.png")
             self.update_timer.start()
@@ -1218,13 +1676,21 @@ class AudioPreviewWidget(QFrame):
                 self._clear_highlights()
                 self.waveform_timeline.set_playhead_time(0.0)
 
-    def skip_forward(self) -> None:
+    def _skip(self, delta: float) -> None:
+        if self._story_active:
+            T = self.story_time_now()
+            if T is None:
+                T = self._story_t or 0.0
+            self.seek_story_time(max(0.0, min(self._story_map.length, T + delta)))
+            return
         curr_t = self._get_audio_t()
-        self.set_position_ms(int((curr_t + 3.0) * 1000))
+        self.set_position_ms(int(max(0.0, curr_t + delta) * 1000))
+
+    def skip_forward(self) -> None:
+        self._skip(3.0)
 
     def skip_backward(self) -> None:
-        curr_t = self._get_audio_t()
-        self.set_position_ms(int(max(0.0, curr_t - 3.0) * 1000))
+        self._skip(-3.0)
 
     def _on_volume_changed(self, v: int) -> None:
         self.audio_output.setVolume(v / 100.0)
@@ -1262,6 +1728,9 @@ class AudioPreviewWidget(QFrame):
             self._start_pos_s = self._get_audio_t()
             self._real_start_time = time.time()
         self.player.setPlaybackRate(new_rate)
+        pp = getattr(self, "patch_playback", None)
+        if pp is not None:
+            pp.set_rate(new_rate)                  # a patch playing now follows the new speed
         try:
             self.player.setPitchCompensation(True)  # voices keep their pitch when faster
         except Exception:
@@ -1316,6 +1785,15 @@ class AudioPreviewWidget(QFrame):
     def _on_seek_released(self) -> None:
         from PySide6.QtGui import QGuiApplication
         self._seek_dragging = False
+        if self._story_active and self._story_map.length > 0:
+            T = self.slider_seek.value() / 1000.0 * self._story_map.length
+            self.seek_story_time(T)
+            mods = QGuiApplication.queryKeyboardModifiers()
+            if mods & (Qt.ControlModifier | Qt.AltModifier):
+                t_src = self._story_map.to_source(T)[0]
+                if t_src is not None and self.main_window and hasattr(self.main_window, "_jump_playhead"):
+                    self.main_window._jump_playhead(t_src)
+            return
         dur = self.player.duration()
         if dur > 0:
             ms = int(self.slider_seek.value() / 1000.0 * dur)
@@ -1327,20 +1805,70 @@ class AudioPreviewWidget(QFrame):
                     self.main_window._jump_playhead(t_s)
 
     def _on_seek_moved(self, value: int) -> None:
+        if self._story_active and self._story_map.length > 0:
+            T = value / 1000.0 * self._story_map.length
+            self._show_time(self._story_map.to_source(T)[0] or 0.0, T)
+            return
         dur = self.player.duration()
         if dur > 0:
             t = (value / 1000.0) * (dur / 1000.0)
-            self.lbl_timecode.setText(self._format_timecode(t))
+            if self.clean_ops:
+                t = self._audio_to_original_time(t)
+            elif self._preview_on:
+                t = self._preview_to_source(t)
+            self._show_time(t)
 
     def _on_waveform_seek_requested(self, timestamp_s: float, sync_resolve: bool = False) -> None:
         """Receives playhead click/scrub from WaveformTimelineWidget for 60 FPS local playback and video sync."""
         if self.clean_ops:
             # The ribbon shows the assembled audio: the click is already in its time, no conversion
             self.set_position_ms(int(timestamp_s * 1000))
+            src_t = timestamp_s
+        elif self.waveform_timeline.story_view and self._story_active:
+            # The ribbon shows the story: the click is story time
+            self.seek_story_time(timestamp_s)
+            src_t = self._story_map.to_source(timestamp_s)[0]
         else:
             self.seek_source_time(timestamp_s)
-        if sync_resolve and self.main_window and hasattr(self.main_window, "_jump_playhead"):
-            self.main_window._jump_playhead(timestamp_s)
+            src_t = timestamp_s
+        if sync_resolve and src_t is not None and self.main_window and hasattr(self.main_window, "_jump_playhead"):
+            self.main_window._jump_playhead(src_t)
+
+    def _show_time(self, orig_t: float, story_t: Optional[float] = None) -> None:
+        """The time readout: story time while the story plays ("1:12 / 2:25": where / how long, on every page,
+        voice patches at their real length); the recording's time with Recording on or no story yet. The
+        tooltip adds the other one and the Resolve timecode."""
+        import story_time as st
+        win = self.main_window
+        _t = win.txt if win else (lambda k, d=None: d or k)
+        rec_t = orig_t - self._offset_s()   # the story counts recording time + offset (story_panel), every mode
+        e = None
+        if self._story_active:
+            e = story_t if story_t is not None else (self._story_t if self._story_t is not None else 0.0)
+        rec = _t("time_in_recording", "{time} in the recording").format(time=st.fmt_time(rec_t))
+        tc = _t("preview_tt_timecode", "Timecode {tc}").format(tc=self._format_timecode(orig_t))
+        if e is not None:
+            length = self._story_map.length
+            text = f"{st.fmt_time(e)} / {st.fmt_time(length)}"
+            tip = "\n".join((_t("time_in_story_of", "{time} in the story (of {length})").format(
+                time=st.fmt_time(e), length=st.fmt_time(length)), rec, tc))
+        else:
+            text = st.fmt_time(rec_t)
+            lines = [rec]
+            if self.recording_mode:
+                lines.append(_t("player_recording_banner", "Playing the original recording — not the story. Turn off Play original to hear the story."))
+            elif not self.clean_ops and not self._has_story():
+                lines.append(_t("player_no_story", "No story yet · playing the recording"))
+            tip = "\n".join(lines + [tc])
+        lbl = self.lbl_timecode
+        if lbl.text() != text:
+            lbl.setText(text)
+        if tip != self._time_tip:
+            self._time_tip = tip
+            lbl.setToolTip(tip)
+        if not getattr(self, "_time_w_set", False) and lbl.isVisible():
+            self._time_w_set = True   # wide enough for "0:00 / 0:00": the row doesn't shift as it changes
+            lbl.setMinimumWidth(lbl.fontMetrics().horizontalAdvance("00:00 / 00:00") + config.S(24) + 2)
 
     def _format_timecode(self, seconds: float) -> str:
         """Formats seconds to SMPTE timecode (HH:MM:SS:FF) matching DaVinci Resolve."""
@@ -1400,28 +1928,57 @@ class AudioPreviewWidget(QFrame):
         if getattr(self, "is_collapsed", False):
             self._clear_highlights()
             return
-        canvas = getattr(self.main_window, "text_canvas", None)
-        if not canvas or not getattr(canvas, "words_data", None):
-            return
+        playing = self.player.playbackState() == QMediaPlayer.PlayingState
 
-        if (self.edit_mode and self._edit_segments and not self.clean_ops and not self._preview_on
-                and self.player.playbackState() == QMediaPlayer.PlayingState):
+        # Voice patches first: a longer patch holds the recording before the story jumps to the next clip
+        if playing and not self.clean_ops:
+            try:
+                at = max(0.0, self._get_audio_t())
+                self.patch_playback.tick(self._preview_to_source(at) if self._preview_on else at)
+            except Exception as exc:
+                log_error(f"patch playback: {exc}")
+
+        if self._story_active and self._edit_segments and not self._preview_on and playing:
             self._follow_edit()
 
         audio_t = max(0.0, self._get_audio_t())
         orig_t = self._audio_to_original_time(audio_t) if self.clean_ops else audio_t
         if self._preview_on:
             orig_t = self._preview_to_source(audio_t)
+        pp = getattr(self, "patch_playback", None)
+        vt = pp.virtual_source_t() if pp is not None and pp.holding else None
+        if vt is not None:
+            # a voice patch plays (the recording waits at its span): the playhead crosses the span with it
+            orig_t = vt
+            audio_t = self._source_to_preview(vt) if self._preview_on else vt
+
+        # Story time: one clock for the readout, the seek bar and the ribbon
+        story_t = self._story_time_of(orig_t) if self._story_active else None
+        if story_t is not None:
+            self._story_t = story_t
 
         dur = self.player.duration() / 1000.0
-        self.lbl_timecode.setText(self._format_timecode(orig_t))
+        self._show_time(orig_t, story_t)
 
         # Update seek slider position
-        if not self._seek_dragging and dur > 0:
-            self.slider_seek.setValue(int(audio_t / dur * 1000))
+        if not self._seek_dragging:
+            if self._story_active and self._story_map.length > 0:
+                if story_t is not None:
+                    self.slider_seek.setValue(int(story_t / self._story_map.length * 1000))
+            elif dur > 0:
+                self.slider_seek.setValue(int(audio_t / dur * 1000))
 
-        # Synchronize Waveform Timeline playhead (the ribbon always shows the source while previewing)
-        self.waveform_timeline.set_playhead_time(orig_t if self._preview_on else audio_t)
+        # The ribbon's playhead: story time on the story, the recording's time on the recording
+        wt = self.waveform_timeline
+        if wt.story_view:
+            if story_t is not None and not getattr(wt, "_is_scrubbing", False):
+                wt.set_playhead_time(story_t)
+        else:
+            wt.set_playhead_time(orig_t if self._preview_on else audio_t)
+
+        canvas = getattr(self.main_window, "text_canvas", None)
+        if not canvas or not getattr(canvas, "words_data", None):
+            return
 
         # Story board: highlight the block that's playing (a few times a second is plenty)
         now = time.time()
@@ -1429,7 +1986,7 @@ class AudioPreviewWidget(QFrame):
             self._board_tick = now
             board = getattr(self.main_window, "story_board", None)
             if board is not None:
-                board.set_playing_time(orig_t if self.player.playbackState() == QMediaPlayer.PlayingState else None)
+                board.set_playing_time(orig_t if (self.player.playbackState() == QMediaPlayer.PlayingState or vt is not None) else None)
 
         # Word highlighting
         found_idx = -1
@@ -1463,6 +2020,16 @@ class AudioPreviewWidget(QFrame):
 
         if getattr(self, "tgl_centered", None) and self.tgl_centered.isChecked():
             self._center_current_word()
+
+        # The Story page shows the word being spoken too (as Clean does)
+        if found_idx != getattr(self, "_story_word_idx", -2):
+            self._story_word_idx = found_idx
+            sv = getattr(self.main_window, "story_view", None)
+            if sv is not None and hasattr(sv, "set_playing_word") and self.main_window._stack.currentIndex() == 5:
+                try:
+                    sv.set_playing_word(found_idx, orig_t)
+                except Exception as exc:
+                    print(f"[preview] story word: {exc}")
 
     def _clear_highlights(self) -> None:
         canvas = getattr(self.main_window, "text_canvas", None)
